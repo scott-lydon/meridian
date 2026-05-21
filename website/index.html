@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meridian — Binary Stock Outcome Markets on Solana</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0e1a;
+      --panel: #1a2236;
+      --panel-2: #232c45;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --muted: #94a3b8;
+      --text: #e2e8f0;
+      --yes: #10b981;
+      --no: #ef4444;
+      --border: #2d3654;
+    }
+    body { background: var(--bg); color: var(--text); font-family: ui-sans-serif, system-ui, sans-serif; }
+    .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 1rem; }
+    .panel-2 { background: var(--panel-2); border: 1px solid var(--border); border-radius: 0.75rem; }
+    .pill-yes { background: rgba(16, 185, 129, 0.15); color: var(--yes); }
+    .pill-no { background: rgba(239, 68, 68, 0.15); color: var(--no); }
+    .pill-accent { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
+    a { color: var(--accent); }
+    a:hover { color: var(--accent-hover); }
+    pre, code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+    nav a.nav-link { color: var(--muted); }
+    nav a.nav-link:hover { color: var(--text); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <nav class="sticky top-0 z-20 backdrop-blur-md" style="background: rgba(10, 14, 26, 0.8); border-bottom: 1px solid var(--border);">
+    <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
+      <a href="#top" class="text-lg font-semibold"><span class="text-indigo-400 font-mono">M</span>eridian</a>
+      <div class="hidden gap-5 text-sm sm:flex">
+        <a class="nav-link" href="#topology">Topology</a>
+        <a class="nav-link" href="#components">Components</a>
+        <a class="nav-link" href="#flow">Data flow</a>
+        <a class="nav-link" href="#decisions">Decisions</a>
+        <a class="nav-link" href="#tradeoffs">Trade-offs</a>
+        <a class="nav-link" href="#stack">Stack</a>
+        <a class="nav-link" href="https://github.com/scott-lydon/meridian">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section id="top" class="mx-auto max-w-6xl px-6 py-16">
+    <h1 class="text-5xl font-bold tracking-tight sm:text-6xl">Meridian</h1>
+    <p class="mt-3 text-xl text-slate-400">Binary stock outcome markets on Solana devnet.</p>
+    <p class="mt-2 max-w-3xl text-slate-400">
+      Trade tokens that pay <span class="font-mono pill-yes px-1.5 py-0.5 rounded">$1.00 USDC</span> if a MAG7 stock closes at or above a strike today, and
+      <span class="font-mono pill-no px-1.5 py-0.5 rounded">$0.00</span> if it closes below. Non-custodial. In-program order book. Pyth-settled at 16:00 ET.
+    </p>
+
+    <div class="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div class="panel p-5">
+        <div class="text-3xl font-bold">13/13</div>
+        <div class="mt-1 text-xs uppercase tracking-wider text-slate-400">Lifecycle tests green</div>
+      </div>
+      <div class="panel p-5">
+        <div class="text-3xl font-bold">$1.00</div>
+        <div class="mt-1 text-xs uppercase tracking-wider text-slate-400">Invariant: Yes + No</div>
+      </div>
+      <div class="panel p-5">
+        <div class="text-3xl font-bold">10 min</div>
+        <div class="mt-1 text-xs uppercase tracking-wider text-slate-400">Settle latency target</div>
+      </div>
+      <div class="panel p-5">
+        <div class="text-3xl font-bold">~400ms</div>
+        <div class="mt-1 text-xs uppercase tracking-wider text-slate-400">Tx finality (devnet)</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Topology -->
+  <section id="topology" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Topology</h2>
+    <p class="mb-6 max-w-3xl text-slate-400">
+      Three deployable artifacts. Anchor program on Solana devnet. Next.js frontend on Vercel. Node automation on Render. Pyth is read-only.
+    </p>
+    <div class="panel p-6">
+      <pre class="mermaid">
+flowchart LR
+  subgraph Client["Client"]
+    Wallet["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='18'/> Phantom wallet"]
+  end
+  subgraph Solana["Solana devnet"]
+    direction TB
+    Program["<img src='https://cdn.simpleicons.org/rust/c1763a' width='18'/> Meridian program<br/>(Anchor 0.31.1)"]
+    Config["Config PDA"]
+    Market["Market PDA<br/>(per strike per day)"]
+    Book["OrderBook<br/>(zero-copy slabs)"]
+    Vault["USDC vault"]
+    Mints["Yes/No mints"]
+  end
+  subgraph Off["Off-chain"]
+    direction TB
+    Frontend["<img src='https://cdn.simpleicons.org/nextdotjs/ffffff' width='18'/> Next.js 14<br/>(Vercel)"]
+    Automation["<img src='https://cdn.simpleicons.org/nodedotjs/339933' width='18'/> Automation<br/>(Render)"]
+  end
+  subgraph Oracle["Oracle"]
+    Pyth["<img src='https://cdn.simpleicons.org/pyth/4ec9b0' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
+  end
+  Wallet -->|sign tx| Frontend
+  Frontend -->|RPC| Program
+  Frontend -.->|WS subscribe| Book
+  Automation -->|cron 08:00 ET<br/>create markets| Program
+  Automation -->|cron 16:05 ET<br/>settle| Program
+  Pyth -.->|prev close| Automation
+  Pyth -.->|on-chain verify<br/>slice 2| Program
+  Program --- Config
+  Program --- Market
+  Program --- Book
+  Program --- Vault
+  Program --- Mints
+      </pre>
+    </div>
+  </section>
+
+  <!-- Components -->
+  <section id="components" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Components</h2>
+    <p class="mb-6 text-slate-400">Five pieces. Each does one thing.</p>
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div class="panel p-6">
+        <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/rust/c1763a" width="20" alt="" /><h3 class="text-xl font-semibold">Anchor program</h3></div>
+        <p class="text-sm text-slate-300">Single Solana program. Owns every piece of on-chain state. Instructions: initialize_config, create_strike_market, mint_pair, place_order, cancel_order, settle_market_manual, admin_settle, redeem, pause, unpause.</p>
+        <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+          <div><div class="text-yes font-semibold mb-1">Pros</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>One source of truth for state</li><li>Atomic Buy No path is feasible</li><li>Property tests for invariants</li></ul></div>
+          <div><div class="text-no font-semibold mb-1">Cons</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Custom matcher is less battle-tested</li><li>Stack pressure from large accounts</li><li>Compute budget per tx is finite</li></ul></div>
+        </div>
+      </div>
+      <div class="panel p-6">
+        <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/anchor/512BD4" width="20" alt="" /><h3 class="text-xl font-semibold">In-program order book</h3></div>
+        <p class="text-sm text-slate-300">Zero-copy slabs. Bids descending, asks ascending. FIFO at price. Depth 64 per side. USDC and Yes escrow ATAs owned by book PDA. Matching via cranker.</p>
+        <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+          <div><div class="text-yes font-semibold mb-1">Pros</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Atomic mint+sell in one ix</li><li>No off-chain listing coordination</li><li>Fits Solana CPI create limit</li></ul></div>
+          <div><div class="text-no font-semibold mb-1">Cons</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Less depth than mature DEXs</li><li>We own matching-engine bugs</li><li>Requires zero-copy discipline</li></ul></div>
+        </div>
+      </div>
+      <div class="panel p-6">
+        <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/nextdotjs/ffffff" width="20" alt="" /><h3 class="text-xl font-semibold">Frontend (Next.js)</h3></div>
+        <p class="text-sm text-slate-300">App Router on Vercel. Pages: landing, markets grid, trade page with order book, portfolio, history. TanStack Query for chain reads, Zustand for UI, wallet adapter for Phantom + Solflare. Branded UsdcBase bigint type for money.</p>
+        <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+          <div><div class="text-yes font-semibold mb-1">Pros</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>SSR landing, client trading</li><li>Type-safe Anchor client from IDL</li><li>Sub-2s order book polling</li></ul></div>
+          <div><div class="text-no font-semibold mb-1">Cons</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Buffer/Node polyfill weight</li><li>Wallet adapter UX is opinionated</li></ul></div>
+        </div>
+      </div>
+      <div class="panel p-6">
+        <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/nodedotjs/339933" width="20" alt="" /><h3 class="text-xl font-semibold">Automation service</h3></div>
+        <p class="text-sm text-slate-300">Node 20 + croner on Render. Two crons in America/New_York. Morning: Pyth read + create_strike_market per strike. Settlement: 15-min retry window + admin_settle per market. NYSE calendar hard-coded. JSON logs.</p>
+        <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
+          <div><div class="text-yes font-semibold mb-1">Pros</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Sub-100ms cron drift</li><li>Idempotent on every job</li><li>Slack alert on give-up</li></ul></div>
+          <div><div class="text-no font-semibold mb-1">Cons</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Single-instance (no HA in v1)</li><li>Keypair custody required</li></ul></div>
+        </div>
+      </div>
+      <div class="panel p-6 lg:col-span-2">
+        <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/pyth/4ec9b0" width="20" alt="" /><h3 class="text-xl font-semibold">Pyth oracle</h3></div>
+        <p class="text-sm text-slate-300">Pull model. Off-chain: Hermes for previous close and settlement price. On-chain (slice 2): pyth-solana-receiver-sdk for staleness + confidence-band verify inside settle_market.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Data flow -->
+  <section id="flow" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Data flow — daily lifecycle</h2>
+    <div class="panel p-6">
+      <pre class="mermaid">
+sequenceDiagram
+  participant Cron as Automation
+  participant Pyth as Pyth Hermes
+  participant Prog as Anchor program
+  participant User as User wallet
+  Cron->>Pyth: 08:00 ET fetch prev closes (7 tickers)
+  Pyth-->>Cron: prices + publish_time
+  loop per ticker
+    Cron->>Cron: compute strikes ±3,6,9% rounded $10
+  end
+  loop per (ticker, strike)
+    Cron->>Prog: create_strike_market (admin)
+    Prog-->>Cron: Market PDA created
+  end
+  Note over User,Prog: 09:30-16:00 ET trading
+  User->>Prog: mint_pair(N) → pays N USDC, gets N Yes + N No
+  User->>Prog: place_order(Bid, price, qty) → escrow USDC
+  Cron->>Pyth: 16:05 ET fetch closes
+  Pyth-->>Cron: prices + conf bps
+  loop per market
+    Cron->>Prog: admin_settle(closing_price)
+    Prog->>Prog: write Outcome (Yes wins or No wins)
+  end
+  User->>Prog: redeem(side, qty) → burn → $1.00 if winner
+      </pre>
+    </div>
+  </section>
+
+  <!-- Decisions -->
+  <section id="decisions" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Decisions</h2>
+    <p class="mb-6 max-w-3xl text-slate-400">Every architectural choice, the alternative considered, and why. Mirror of <code class="text-xs">plan.md §4</code>.</p>
+    <div class="panel overflow-x-auto p-2">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wider text-slate-400">
+            <th class="px-4 py-3">Decision</th><th class="px-4 py-3">We chose</th><th class="px-4 py-3">Alternative</th><th class="px-4 py-3">Why</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-300">
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Chain</td><td class="px-4 py-3 font-semibold">Solana devnet</td><td class="px-4 py-3 text-slate-500">Arbitrum / Base / HyperLiquid</td><td class="px-4 py-3">Sub-second finality; PRD-required for pass.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Framework</td><td class="px-4 py-3 font-semibold">Anchor 0.31.1</td><td class="px-4 py-3 text-slate-500">Raw Solana program</td><td class="px-4 py-3">Account validation, IDL, TS client.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Order book</td><td class="px-4 py-3 font-semibold">In-program slabs</td><td class="px-4 py-3 text-slate-500">Phoenix CPI</td><td class="px-4 py-3">Atomic Buy No needs single-program revert.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Oracle</td><td class="px-4 py-3 font-semibold">Pyth (pull)</td><td class="px-4 py-3 text-slate-500">Switchboard</td><td class="px-4 py-3">First-class MAG7 equity feeds + conf interval.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">USDC</td><td class="px-4 py-3 font-semibold">Circle devnet mint</td><td class="px-4 py-3 text-slate-500">Custom stable</td><td class="px-4 py-3">Real mint mirrors mainnet semantics.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Token</td><td class="px-4 py-3 font-semibold">SPL Token</td><td class="px-4 py-3 text-slate-500">Token-2022</td><td class="px-4 py-3">No transfer hooks needed in v1.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Wallet</td><td class="px-4 py-3 font-semibold">solana/wallet-adapter</td><td class="px-4 py-3 text-slate-500">Single integration</td><td class="px-4 py-3">Standard; Phantom + Solflare + Backpack.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Frontend</td><td class="px-4 py-3 font-semibold">Next.js 14 App Router</td><td class="px-4 py-3 text-slate-500">Vite + RR</td><td class="px-4 py-3">SSR landing, client rest, Vercel ergonomics.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Server state</td><td class="px-4 py-3 font-semibold">TanStack Query</td><td class="px-4 py-3 text-slate-500">Apollo / SWR</td><td class="px-4 py-3">Best cache invalidation by key.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">UI state</td><td class="px-4 py-3 font-semibold">Zustand</td><td class="px-4 py-3 text-slate-500">Redux / Jotai</td><td class="px-4 py-3">No allocation in selectors (boxy lesson).</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Automation</td><td class="px-4 py-3 font-semibold">Node + croner</td><td class="px-4 py-3 text-slate-500">Lambda / Workers</td><td class="px-4 py-3">Long-running process for cron + crank.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Logging</td><td class="px-4 py-3 font-semibold">pino (JSON)</td><td class="px-4 py-3 text-slate-500">Winston / console</td><td class="px-4 py-3">Fastest; Render scrapes JSON.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Trade-offs -->
+  <section id="tradeoffs" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Trade-offs</h2>
+    <p class="mb-6 text-slate-400">Each one is a "we accept X, knowing Y, mitigated by Z, triggers a revisit when W".</p>
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div class="panel p-6">
+        <h3 class="mb-2 font-semibold">In-program book vs Phoenix CPI</h3>
+        <p class="text-sm text-slate-400"><span class="text-yes font-semibold">Why we accept it: </span>atomic Buy No needs single-program revert; Phoenix listing required off-chain coordination. <span class="text-no font-semibold">When it would bite: </span>obscure slab-walk bug nobody happens to write a test for. <span class="pill-accent rounded px-1.5">Mitigation:</span> property tests on conservation (USDC + Yes) across 1000 random sequences planned in slice 3.5.</p>
+      </div>
+      <div class="panel p-6">
+        <h3 class="mb-2 font-semibold">Pyth pull vs Switchboard</h3>
+        <p class="text-sm text-slate-400"><span class="text-yes font-semibold">Why we accept it: </span>first-class MAG7 equity feeds with confidence intervals; pull model lets us post fresh price at settle. <span class="text-no font-semibold">When it would bite: </span>sustained Hermes outage > 15 min during US close. <span class="pill-accent rounded px-1.5">Mitigation:</span> admin override after 1-hour delay with the override flag recorded on chain.</p>
+      </div>
+      <div class="panel p-6">
+        <h3 class="mb-2 font-semibold">Position constraint as UX rule</h3>
+        <p class="text-sm text-slate-400"><span class="text-yes font-semibold">Why we accept it: </span>market makers calling mint_pair transiently hold both Yes and No; blocking at program level would break legit liquidity. <span class="text-no font-semibold">When it would bite: </span>user uses CLI directly and confuses themselves. <span class="pill-accent rounded px-1.5">Mitigation:</span> frontend disables Buy Yes when holding No; portfolio labels pending sells.</p>
+      </div>
+      <div class="panel p-6">
+        <h3 class="mb-2 font-semibold">Devnet-only for v1</h3>
+        <p class="text-sm text-slate-400"><span class="text-yes font-semibold">Why we accept it: </span>PRD requires devnet for the pass; constitution forbids mainnet for v1. <span class="text-no font-semibold">When it would bite: </span>devnet liquidity is whatever test wallets put in. <span class="pill-accent rounded px-1.5">Mitigation:</span> mainnet path is a documented bonus, separate review.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stack -->
+  <section id="stack" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Stack</h2>
+    <p class="mb-6 text-slate-400">Every dependency is justified in <code class="text-xs">plan.md §4</code>.</p>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/rust/c1763a" width="20" alt="" /><span class="text-sm">Rust</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/anchor/512BD4" width="20" alt="" /><span class="text-sm">Anchor 0.31.1</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/solana/9945FF" width="20" alt="" /><span class="text-sm">Solana</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/typescript/3178c6" width="20" alt="" /><span class="text-sm">TypeScript</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/nextdotjs/ffffff" width="20" alt="" /><span class="text-sm">Next.js 14</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/react/61dafb" width="20" alt="" /><span class="text-sm">React 18</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/tailwindcss/06b6d4" width="20" alt="" /><span class="text-sm">Tailwind</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/reactquery/ff4154" width="20" alt="" /><span class="text-sm">TanStack Query</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/nodedotjs/339933" width="20" alt="" /><span class="text-sm">Node 20</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/pyth/4ec9b0" width="20" alt="" /><span class="text-sm">Pyth Network</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/pnpm/F69220" width="20" alt="" /><span class="text-sm">pnpm</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/vitest/729b1b" width="20" alt="" /><span class="text-sm">vitest</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/vercel/ffffff" width="20" alt="" /><span class="text-sm">Vercel</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/render/46e3b7" width="20" alt="" /><span class="text-sm">Render</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/github/ffffff" width="20" alt="" /><span class="text-sm">GitHub</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/gitlab/fc6d26" width="20" alt="" /><span class="text-sm">GitLab</span></div>
+    </div>
+  </section>
+
+  <footer class="mx-auto max-w-6xl px-6 py-12 text-sm text-slate-400">
+    <div class="flex flex-wrap items-center gap-6">
+      <a href="https://github.com/scott-lydon/meridian">GitHub</a>
+      <a href="https://labs.gauntletai.com/scottlydon/meridian">GitLab</a>
+      <a href="../plan.md">plan.md</a>
+      <a href="../ARCHITECTURE.md">ARCHITECTURE.md</a>
+      <a href="DEFENSE_BREAKOUT_SCRIPT.md">Defense script</a>
+      <a href="AI_INTERVIEW_PREP.md">AI interview prep</a>
+    </div>
+    <p class="mt-4">Devnet only · No regulatory or compliance claims · Not financial advice.</p>
+  </footer>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "dark",
+      securityLevel: "loose",
+      themeVariables: {
+        primaryColor: "#1a2236",
+        primaryTextColor: "#e2e8f0",
+        primaryBorderColor: "#2d3654",
+        lineColor: "#94a3b8",
+        secondaryColor: "#232c45",
+        tertiaryColor: "#0a0e1a",
+        background: "#0a0e1a"
+      }
+    });
+  </script>
+</body>
+</html>

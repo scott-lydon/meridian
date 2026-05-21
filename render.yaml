@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: meridian-automation
+    runtime: node
+    region: oregon
+    plan: starter
+    rootDir: automation
+    buildCommand: pnpm install --frozen-lockfile
+    startCommand: pnpm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: TZ
+        value: America/New_York
+      - key: SOLANA_RPC_URL
+        value: https://api.devnet.solana.com
+      - key: SOLANA_WS_URL
+        value: wss://api.devnet.solana.com
+      - key: SOLANA_CLUSTER
+        value: devnet
+      - key: USDC_MINT
+        value: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+      - key: PYTH_HERMES_URL
+        value: https://hermes.pyth.network
+      - key: PYTH_FEED_AAPL
+        value: 5a207c4aa0114baecf852fcd9db9beb8ec715f2db48caa525dbd878fd416fb09
+      - key: PYTH_FEED_MSFT
+        value: 8f98f8267ddddeeb61b4fd11f21dc0c2842c417622b4d685243fa73b5830131f
+      - key: PYTH_FEED_GOOGL
+        value: 88d0800b1649d98e21b8bf9c3f42ab548034d62874ad5d80e1c1b730566d7f61
+      - key: PYTH_FEED_AMZN
+        value: 82c59e36a8e0247e15283748d6cd51f5fa1019d73fbf3ab6d927e17d9e357a7f
+      - key: PYTH_FEED_NVDA
+        value: 61c4ca5b9731a79e285a01e24432d57d89f0ecdd4cd7828196ca8992d5eafef6
+      - key: PYTH_FEED_META
+        value: 399f1e8f1c4a517859963b56f104727a7a3c7f0f8fee56d34fa1f72e5a4b78ef
+      - key: PYTH_FEED_TSLA
+        value: 42676a595d0099c381687124805c8bb22c75424dffcaa55e3dc6549854ebe20a
+      # MERIDIAN_PROGRAM_ID: set after first devnet deploy
+      # ADMIN_KEYPAIR_PATH, AUTOMATION_KEYPAIR_PATH: set as Render secret files
+      # SLACK_WEBHOOK_URL: set in dashboard (optional)
