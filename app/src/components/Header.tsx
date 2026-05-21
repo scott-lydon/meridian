@@ -9,6 +9,7 @@ const nav = [
   { href: "/markets", label: "Markets" },
   { href: "/portfolio", label: "Portfolio" },
   { href: "/history", label: "History" },
+  { href: "/audit", label: "Audit" },
 ];
 
 export function Header() {
