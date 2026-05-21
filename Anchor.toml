@@ -21,3 +21,6 @@ members = ["programs/meridian"]
 
 [scripts]
 test = "pnpm exec tsx --import tsx tests/scaffold.test.ts"
+
+[toolchain]
+anchor_version = "0.30.1"
