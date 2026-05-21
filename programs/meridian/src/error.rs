@@ -78,4 +78,17 @@ pub enum MeridianError {
 
     #[msg("Provided vault account does not match the market's vault PDA")]
     WrongVaultAccount,
+
+    // === Order book (slice 3) ===
+    #[msg("Order book side is at capacity")]
+    OrderBookFull,
+
+    #[msg("Order not found (owner + sequence did not match)")]
+    OrderNotFound,
+
+    #[msg("IOC order could not be fully filled at the requested price")]
+    IocPartialFillRejected,
+
+    #[msg("Order price must be between 1 and 99 ticks ($0.01 to $0.99)")]
+    InvalidOrderPrice,
 }
