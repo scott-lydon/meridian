@@ -111,4 +111,22 @@ pub mod meridian {
     ) -> Result<()> {
         instructions::cancel_order::handler(ctx, side, sequence)
     }
+
+    // ===== Slice 5: admin guardrails =====
+
+    /// Admin override settle. Enforces market.admin_override_earliest
+    /// (created_at + config.admin_override_delay_secs) on-chain.
+    pub fn admin_settle(ctx: Context<AdminSettle>, closing_price_micros: u64) -> Result<()> {
+        instructions::admin_settle::handler(ctx, closing_price_micros)
+    }
+
+    /// Pause all minting and order placement (redeem keeps working).
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
+        instructions::pause::pause_handler(ctx)
+    }
+
+    /// Resume normal operation.
+    pub fn unpause(ctx: Context<Pause>) -> Result<()> {
+        instructions::pause::unpause_handler(ctx)
+    }
 }

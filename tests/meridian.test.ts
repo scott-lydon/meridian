@@ -457,6 +457,58 @@ describe("meridian slice 3 — order book", () => {
     expect(Number(book.bids[0].qty)).toBe(5);
   });
 
+  it("slice 5: pause flips Config.paused", async () => {
+    await program.methods
+      .pause()
+      .accounts({ config: configPda, admin: admin.publicKey })
+      .rpc();
+    let cfg = await program.account.config.fetch(configPda);
+    expect(cfg.paused).toBe(true);
+    await program.methods
+      .unpause()
+      .accounts({ config: configPda, admin: admin.publicKey })
+      .rpc();
+    cfg = await program.account.config.fetch(configPda);
+    expect(cfg.paused).toBe(false);
+  });
+
+  it("slice 5: non-admin pause is Unauthorized", async () => {
+    let threw = false;
+    try {
+      await program.methods
+        .pause()
+        .accounts({ config: configPda, admin: user.publicKey })
+        .signers([user])
+        .rpc();
+    } catch (e) {
+      threw = true;
+      const msg = (e as Error).message;
+      expect(msg).toMatch(/Unauthorized|unknown signer|constraint/i);
+    }
+    expect(threw).toBe(true);
+  });
+
+  it("slice 5: admin_settle blocked before override delay", async () => {
+    // Market.admin_override_earliest = created_at + 3600. Test runs immediately,
+    // so admin_settle should reject.
+    let threw = false;
+    try {
+      await program.methods
+        .adminSettle(new BN(225 * USDC_BASE))
+        .accounts({
+          config: configPda,
+          market: marketPda,
+          admin: admin.publicKey,
+        })
+        .rpc();
+    } catch (e) {
+      threw = true;
+      const msg = (e as Error).message;
+      expect(msg).toMatch(/AdminOverrideTooEarly|6006|3600/i);
+    }
+    expect(threw).toBe(true);
+  });
+
   it("cancel_order refunds USDC", async () => {
     const before = (await getAccount(provider.connection, userUsdc)).amount;
     const book0 = await program.account.orderBook.fetch(orderBookPda);
