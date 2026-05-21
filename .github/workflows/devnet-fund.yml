@@ -1,0 +1,42 @@
+name: Devnet airdrop
+
+# Manual trigger only. Used when the local Mac IP is rate-limited by the
+# public Solana devnet faucet — GitHub-hosted runners are on a different
+# IP range and often have a fresh bucket.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey:
+        description: "Solana pubkey to fund"
+        required: true
+        default: "BwKvqaSrFD2JPaBRMeK1LVkDLec5iSPUNAE5wR2jNwfS"
+      amount_sol:
+        description: "Amount in SOL (max 2 per call)"
+        required: true
+        default: "2"
+
+jobs:
+  airdrop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+      - name: Show runner IP
+        run: curl -s https://ifconfig.me ; echo
+      - name: Request airdrop x3
+        env:
+          PUBKEY: ${{ inputs.pubkey }}
+          AMOUNT: ${{ inputs.amount_sol }}
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "attempt $i ..."
+            solana airdrop "$AMOUNT" "$PUBKEY" --url devnet || true
+            sleep 5
+          done
+      - name: Final balance
+        env:
+          PUBKEY: ${{ inputs.pubkey }}
+        run: solana balance --url devnet "$PUBKEY"
