@@ -24,9 +24,15 @@ const EnvSchema = z.object({
   PYTH_FEED_NVDA: FeedSchema,
   PYTH_FEED_META: FeedSchema,
   PYTH_FEED_TSLA: FeedSchema,
-  ADMIN_KEYPAIR_PATH: z.string(),
-  AUTOMATION_KEYPAIR_PATH: z.string(),
+  // Keypair sources: provide EITHER the PATH (local dev) OR the JSON
+  // (Render / CI — paste the 64-byte secret key array). At least one of
+  // each (admin/automation) must be present; checked at boot.
+  ADMIN_KEYPAIR_PATH: z.string().optional(),
+  ADMIN_KEYPAIR_JSON: z.string().optional(),
+  AUTOMATION_KEYPAIR_PATH: z.string().optional(),
+  AUTOMATION_KEYPAIR_JSON: z.string().optional(),
   CRANKER_KEYPAIR_PATH: z.string().optional(),
+  CRANKER_KEYPAIR_JSON: z.string().optional(),
   PYTH_MAX_STALENESS_SECS: z.coerce.number().int().positive().default(300),
   PYTH_MAX_CONFIDENCE_BPS: z.coerce.number().int().positive().default(50),
   ADMIN_OVERRIDE_DELAY_SECS: z.coerce.number().int().positive().default(3600),

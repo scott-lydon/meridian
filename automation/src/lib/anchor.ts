@@ -17,12 +17,40 @@ export interface AnchorContext {
   readonly programId: PublicKey;
 }
 
-function loadKeypair(path: string): Keypair {
-  const raw = readFileSync(path, "utf-8");
+function loadKeypair(
+  label: string,
+  jsonEnv: string | undefined,
+  pathEnv: string | undefined,
+): Keypair {
+  // Path of least surprise: JSON env var wins (so Render / CI can paste
+  // the secret key without managing files), then file path, then error
+  // with a clear remedy.
+  const raw =
+    jsonEnv && jsonEnv.trim().length > 0
+      ? jsonEnv
+      : pathEnv
+        ? readFileSync(pathEnv, "utf-8")
+        : null;
+  if (!raw) {
+    throw new Error(
+      `keypair '${label}' missing: set ${label.toUpperCase()}_KEYPAIR_JSON (paste the 64-byte secret-key array) OR ${label.toUpperCase()}_KEYPAIR_PATH (file path)`,
+    );
+  }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const arr: any = JSON.parse(raw);
+  let arr: any;
+  try {
+    arr = JSON.parse(raw);
+  } catch {
+    throw new Error(
+      `keypair '${label}' is not valid JSON (must be a 64-element u8 array)`,
+    );
+  }
   if (!Array.isArray(arr) || arr.length !== 64) {
-    throw new Error(`keypair at ${path} is not a 64-byte secret-key JSON array`);
+    throw new Error(
+      `keypair '${label}' is not a 64-byte secret-key JSON array (got ${
+        Array.isArray(arr) ? `length ${arr.length}` : typeof arr
+      })`,
+    );
   }
   return Keypair.fromSecretKey(Uint8Array.from(arr));
 }
@@ -32,8 +60,12 @@ export function buildAnchor(env: Env): AnchorContext {
     commitment: "confirmed",
     wsEndpoint: env.SOLANA_WS_URL,
   });
-  const automationKeypair = loadKeypair(env.AUTOMATION_KEYPAIR_PATH);
-  const adminKeypair = loadKeypair(env.ADMIN_KEYPAIR_PATH);
+  const automationKeypair = loadKeypair(
+    "automation",
+    env.AUTOMATION_KEYPAIR_JSON,
+    env.AUTOMATION_KEYPAIR_PATH,
+  );
+  const adminKeypair = loadKeypair("admin", env.ADMIN_KEYPAIR_JSON, env.ADMIN_KEYPAIR_PATH);
 
   const wallet: anchor.Wallet = {
     publicKey: automationKeypair.publicKey,

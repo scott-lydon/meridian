@@ -47,12 +47,13 @@ export async function settleMarketWithPyth(
   await txBuilder.addPostPriceUpdates(priceUpdateData);
 
   // 3) Append our settle_market ix, referencing the price-update PDA the
-  //    receiver just wrote.
-  await txBuilder.addPriceConsumerInstructions(async (priceUpdates) => {
-    const pu = priceUpdates[0];
-    if (!pu) {
+  //    receiver just wrote. The SDK gives us a resolver: feedId -> PublicKey.
+  await txBuilder.addPriceConsumerInstructions(async (getPriceUpdateAccount) => {
+    const priceUpdateAccount = getPriceUpdateAccount(`0x${pythFeedIdHex}`);
+    if (!priceUpdateAccount) {
       throw new Error(
-        "PriceUpdateV2 account missing after Pyth post; nothing to consume",
+        `PriceUpdateV2 account missing for feed 0x${pythFeedIdHex} after Pyth post; ` +
+          `getPriceUpdateAccount returned null/undefined`,
       );
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,7 +62,7 @@ export async function settleMarketWithPyth(
       .accounts({
         config: ctx.programId,
         market: marketPubkey,
-        priceUpdate: pu.priceUpdateAccount,
+        priceUpdate: priceUpdateAccount,
         cranker: ctx.automationKeypair.publicKey,
       })
       .instruction();
