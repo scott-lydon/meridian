@@ -3,11 +3,13 @@ packages:
   - automation
   - tests
 
-# Pin rpc-websockets to 7.5.1: 8.x+ removed the deep-import exports that
-# @solana/web3.js 1.x still uses internally; breaks under Node 22's strict
-# ESM resolution with ERR_PACKAGE_PATH_NOT_EXPORTED.
+# Pyth's @pythnetwork/solana-utils transitively pulls @solana/web3.js@1.77.4,
+# which deep-imports rpc-websockets/dist/lib/client. Newer rpc-websockets
+# (9.x) removed that subpath. The direct dep @solana/web3.js@1.98.4 needs
+# rpc-websockets 9.x. Path-scoped override pins ONLY the 1.77.4 subtree to
+# rpc-websockets 7.5.1; the 1.98.4 chain keeps its native 9.x.
 overrides:
-  rpc-websockets: "7.5.1"
+  "@solana/web3.js@1.77.4>rpc-websockets": "7.5.1"
 
 # pnpm 11 native-build approval. Each listed dep is a legitimate transitive
 # of the Solana / Next.js stack; postinstall scripts compile native bindings
