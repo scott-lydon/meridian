@@ -30,4 +30,4 @@ indexing_slicing = "deny"
 [dependencies]
 anchor-lang = { workspace = true }
 anchor-spl = { workspace = true, features = ["token", "associated_token"] }
-pyth-solana-receiver-sdk = { workspace = true }
+# pyth-solana-receiver-sdk added in slice 2
