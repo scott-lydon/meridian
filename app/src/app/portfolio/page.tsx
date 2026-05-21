@@ -5,6 +5,8 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useMarkets } from "@/hooks/useMarkets";
 import { formatUsdc } from "@/lib/usdc";
 
+export const dynamic = "force-dynamic";
+
 export default function PortfolioPage() {
   const { publicKey } = useWallet();
   const { data: markets, isLoading } = useMarkets();

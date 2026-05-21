@@ -9,6 +9,8 @@ import { useMarkets } from "@/hooks/useMarkets";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 
+export const dynamic = "force-dynamic";
+
 interface OrderView {
   owner: string;
   priceUsd: UsdcBase;

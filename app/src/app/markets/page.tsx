@@ -5,6 +5,11 @@ import Link from "next/link";
 import { useMarkets } from "@/hooks/useMarkets";
 import { formatUsdc } from "@/lib/usdc";
 
+// Force runtime rendering — the page depends on the wallet adapter and
+// Anchor client, which pull Node-only modules at module-init time.
+// Next's build-time prerender path can't load them.
+export const dynamic = "force-dynamic";
+
 const MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] as const;
 
 export default function MarketsPage() {
