@@ -1,11 +1,13 @@
 "use client";
 
-import { use } from "react";
+import { use, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
+import { useTrade } from "@/hooks/useTrade";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 
@@ -14,6 +16,7 @@ export const dynamic = "force-dynamic";
 interface OrderView {
   owner: string;
   priceUsd: UsdcBase;
+  priceTicks: number;
   qty: bigint;
   sequence: bigint;
 }
@@ -41,6 +44,7 @@ function useOrderBookFor(marketPubkey: string) {
             const oo: any = o;
             return {
               owner: (oo.owner as PublicKey).toBase58(),
+              priceTicks: Number(oo.priceTicks),
               priceUsd: usdcFromBase(BigInt(oo.priceTicks) * 10_000n),
               qty: BigInt(oo.qty.toString()),
               sequence: BigInt(oo.sequence.toString()),
@@ -51,7 +55,6 @@ function useOrderBookFor(marketPubkey: string) {
           asks: orders(raw.asks, raw.asksLen),
         };
       } catch {
-        // Book not yet initialized for this market.
         return null;
       }
     },
@@ -67,8 +70,44 @@ export default function TradePage({
   const { ticker, market } = use(params);
   const { data: markets } = useMarkets();
   const { data: book, isLoading: bookLoading } = useOrderBookFor(market);
+  const { publicKey } = useWallet();
+  const trade = useTrade(market);
+  const queryClient = useQueryClient();
+
+  const [qty, setQty] = useState(1);
+  const [priceTicks, setPriceTicks] = useState(50);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [lastSig, setLastSig] = useState<string | null>(null);
+  const [lastErr, setLastErr] = useState<string | null>(null);
 
   const m = markets?.find((x) => x.pubkey === market);
+
+  function explorerTx(sig: string) {
+    return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
+  }
+
+  async function run(label: string, fn: () => Promise<string>) {
+    if (!publicKey) {
+      setLastErr("Connect a wallet first.");
+      return;
+    }
+    setBusy(label);
+    setLastErr(null);
+    setLastSig(null);
+    try {
+      const sig = await fn();
+      setLastSig(sig);
+      // Refresh book + balances
+      void queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(market) });
+    } catch (e) {
+      setLastErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const bestBid = book?.bids[0];
+  const bestAsk = book?.asks[0];
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -97,8 +136,7 @@ export default function TradePage({
           {bookLoading && <p className="text-muted">Loading book...</p>}
           {!bookLoading && !book && (
             <p className="text-sm text-muted">
-              Order book not yet initialized for this market. Admin calls{" "}
-              <code className="rounded bg-bg/50 px-1 font-mono">init_order_book</code> first.
+              Order book not yet initialized for this market.
             </p>
           )}
           {book && (
@@ -109,8 +147,8 @@ export default function TradePage({
                   <p className="text-sm text-muted">No bids.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
-                    {book.bids.slice(0, 10).map((b, i) => (
-                      <li key={i} className="flex justify-between">
+                    {book.bids.slice(0, 10).map((b) => (
+                      <li key={`${b.owner}-${b.sequence}`} className="flex justify-between">
                         <span className="text-yes">{formatUsdc(b.priceUsd)}</span>
                         <span className="text-muted">{b.qty.toString()}</span>
                       </li>
@@ -124,8 +162,8 @@ export default function TradePage({
                   <p className="text-sm text-muted">No asks.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
-                    {book.asks.slice(0, 10).map((a, i) => (
-                      <li key={i} className="flex justify-between">
+                    {book.asks.slice(0, 10).map((a) => (
+                      <li key={`${a.owner}-${a.sequence}`} className="flex justify-between">
                         <span className="text-no">{formatUsdc(a.priceUsd)}</span>
                         <span className="text-muted">{a.qty.toString()}</span>
                       </li>
@@ -139,25 +177,114 @@ export default function TradePage({
 
         <div className="rounded-2xl border border-panel bg-panel/40 p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">Trade</h2>
+
+          {!publicKey && (
+            <p className="mb-3 text-sm text-yellow-300">Connect your wallet to trade.</p>
+          )}
+
+          <label className="mb-2 block text-xs text-muted">Quantity (Yes tokens)</label>
+          <input
+            type="number"
+            min={1}
+            value={qty}
+            onChange={(e) => setQty(Math.max(1, Number(e.target.value)))}
+            className="mb-3 w-full rounded-lg border border-panel bg-bg/40 px-3 py-2 font-mono text-sm"
+          />
+
+          <label className="mb-2 block text-xs text-muted">Limit price (¢, 1–99) for Buy/Sell Yes</label>
+          <input
+            type="number"
+            min={1}
+            max={99}
+            value={priceTicks}
+            onChange={(e) => setPriceTicks(Math.min(99, Math.max(1, Number(e.target.value))))}
+            className="mb-3 w-full rounded-lg border border-panel bg-bg/40 px-3 py-2 font-mono text-sm"
+          />
+
           <div className="grid grid-cols-2 gap-2">
-            <button className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30">
-              Buy Yes
+            <button
+              disabled={!trade.ready || busy !== null}
+              onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty))}
+              className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:opacity-40"
+            >
+              {busy === "Buy Yes" ? "..." : "Buy Yes"}
             </button>
-            <button className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30">
-              Buy No
+            <button
+              disabled={!trade.ready || busy !== null || !bestBid}
+              onClick={() =>
+                run("Buy No", () =>
+                  trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
+                )
+              }
+              className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:opacity-40"
+              title={bestBid ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}` : "No bid available"}
+            >
+              {busy === "Buy No" ? "..." : "Buy No"}
             </button>
-            <button className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg">
-              Sell Yes
+            <button
+              disabled={!trade.ready || busy !== null}
+              onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty))}
+              className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
+            >
+              {busy === "Sell Yes" ? "..." : "Sell Yes"}
             </button>
-            <button className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg">
-              Sell No
+            <button
+              disabled={!trade.ready || busy !== null || !bestAsk}
+              onClick={() =>
+                run("Sell No", () =>
+                  trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
+                )
+              }
+              className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
+              title={bestAsk ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}` : "No ask available"}
+            >
+              {busy === "Sell No" ? "..." : "Sell No"}
             </button>
           </div>
-          <p className="mt-4 text-xs text-muted">
-            Trade execution lands in slice 7. Today's binary outcome: pay $X now, win $1.00 if {ticker}{" "}
-            closes at or above {m ? formatUsdc(m.strikeUsd) : "the strike"} at 16:00 ET.
-          </p>
+
+          <button
+            disabled={!trade.ready || busy !== null}
+            onClick={() => run("Mint Pair", () => trade.mintPair(qty))}
+            className="mt-3 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:opacity-40"
+          >
+            {busy === "Mint Pair" ? "..." : `Mint ${qty} pair (deposit $${qty}.00 USDC)`}
+          </button>
+
+          {lastSig && (
+            <p className="mt-4 break-words text-xs text-muted">
+              ✓ tx:{" "}
+              <a className="text-accent" href={explorerTx(lastSig)} target="_blank" rel="noreferrer">
+                {lastSig.slice(0, 10)}…{lastSig.slice(-6)}
+              </a>
+            </p>
+          )}
+          {lastErr && (
+            <p className="mt-4 break-words rounded border border-no/40 bg-no/10 p-2 text-xs text-no">
+              {lastErr}
+            </p>
+          )}
         </div>
+      </section>
+
+      <section className="mb-10 rounded-2xl border border-panel bg-panel/40 p-5 text-xs text-muted">
+        <p className="mb-2 font-semibold uppercase tracking-wider">How each button works</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <span className="text-yes">Buy Yes</span>: places a limit Bid at <code>{priceTicks}¢</code> for <code>{qty}</code> Yes tokens. USDC moves into the book's escrow.
+          </li>
+          <li>
+            <span className="text-no">Buy No</span>: atomic mint-pair + IOC sell of the Yes at the best bid (<code>{bestBid?.priceTicks ?? "—"}¢</code>). One signature.
+          </li>
+          <li>
+            <span className="text-muted">Sell Yes</span>: places a limit Ask at <code>{priceTicks}¢</code>. Yes tokens move into escrow.
+          </li>
+          <li>
+            <span className="text-muted">Sell No</span>: atomic IOC buy of Yes at the best ask (<code>{bestAsk?.priceTicks ?? "—"}¢</code>) + pair redemption. One signature.
+          </li>
+          <li>
+            <span className="text-accent">Mint Pair</span>: deposit <code>{qty} USDC</code>, get <code>{qty} Yes</code> + <code>{qty} No</code>. Use this to seed liquidity.
+          </li>
+        </ul>
       </section>
     </main>
   );
