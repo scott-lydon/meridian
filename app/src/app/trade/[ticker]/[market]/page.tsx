@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -8,8 +8,24 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useTrade } from "@/hooks/useTrade";
+import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
+
+function useCountdown(toUnix: number | undefined): string {
+  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1_000);
+    return () => clearInterval(id);
+  }, []);
+  if (!toUnix) return "—";
+  const diff = toUnix - now;
+  if (diff <= 0) return "settled";
+  const h = Math.floor(diff / 3600);
+  const m = Math.floor((diff % 3600) / 60);
+  const s = diff % 60;
+  return h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +97,12 @@ export default function TradePage({
   const [lastErr, setLastErr] = useState<string | null>(null);
 
   const m = markets?.find((x) => x.pubkey === market);
+  const balances = useMarketBalances(market);
+  const userYesBal = balances.data?.yes ?? 0n;
+  const userNoBal = balances.data?.no ?? 0n;
+  const holdsYes = userYesBal > 0n;
+  const holdsNo = userNoBal > 0n;
+  const countdown = useCountdown(m?.expiryUnix);
 
   function explorerTx(sig: string) {
     return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
@@ -121,12 +143,57 @@ export default function TradePage({
             </p>
           )}
         </div>
-        {m && (
-          <p className="font-mono text-xs text-muted" title={market}>
-            {market.slice(0, 6)}...{market.slice(-4)}
-          </p>
-        )}
+        <div className="text-right">
+          {m && m.outcome === "Pending" && (
+            <div className="rounded-lg border border-panel bg-panel/40 px-3 py-2">
+              <p className="text-xs uppercase tracking-wider text-muted">Settles in</p>
+              <p className="font-mono text-lg">{countdown}</p>
+            </div>
+          )}
+          {m && (
+            <p className="mt-1 font-mono text-xs text-muted" title={market}>
+              {market.slice(0, 6)}...{market.slice(-4)}
+            </p>
+          )}
+        </div>
       </header>
+
+      {/* Payoff display (PRD §Key UI Elements) */}
+      {m && m.outcome === "Pending" && (
+        <section className="mb-6 rounded-2xl border border-accent/40 bg-accent/10 p-4 text-sm">
+          <p className="text-muted">
+            <span className="font-semibold text-text">For each Yes token: </span>
+            you pay <span className="font-mono">$X</span> (the ask). You win{" "}
+            <span className="font-mono">$1.00</span> if <span className="font-semibold">{ticker}</span>{" "}
+            closes at or above <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> at 16:00 ET today.
+            Otherwise the token pays <span className="font-mono">$0.00</span>.
+          </p>
+          <p className="mt-1 text-muted">
+            <span className="font-semibold text-text">For each No token: </span>
+            you pay <span className="font-mono">$1.00 − Yes price</span>. You win{" "}
+            <span className="font-mono">$1.00</span> if <span className="font-semibold">{ticker}</span>{" "}
+            closes <span className="font-semibold">below</span>{" "}
+            <span className="font-mono">{formatUsdc(m.strikeUsd)}</span>.
+          </p>
+        </section>
+      )}
+
+      {/* Position summary */}
+      {publicKey && (
+        <section className="mb-6 flex gap-3 text-sm">
+          <span className="rounded-full bg-yes/20 px-3 py-1 text-yes">
+            Yes: <span className="font-mono">{userYesBal.toString()}</span>
+          </span>
+          <span className="rounded-full bg-no/20 px-3 py-1 text-no">
+            No: <span className="font-mono">{userNoBal.toString()}</span>
+          </span>
+          {(holdsYes || holdsNo) && (
+            <span className="rounded-full bg-yellow-500/20 px-3 py-1 text-yellow-300">
+              Position constraint: cannot Buy {holdsYes ? "No" : "Yes"} until you exit current position
+            </span>
+          )}
+        </section>
+      )}
 
       <section className="mb-10 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="col-span-2 rounded-2xl border border-panel bg-panel/40 p-5">
@@ -203,40 +270,54 @@ export default function TradePage({
 
           <div className="grid grid-cols-2 gap-2">
             <button
-              disabled={!trade.ready || busy !== null}
+              disabled={!trade.ready || busy !== null || holdsNo}
               onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty))}
               className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:opacity-40"
+              title={holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
             >
               {busy === "Buy Yes" ? "..." : "Buy Yes"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null || !bestBid}
+              disabled={!trade.ready || busy !== null || !bestBid || holdsYes}
               onClick={() =>
                 run("Buy No", () =>
                   trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
                 )
               }
               className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:opacity-40"
-              title={bestBid ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}` : "No bid available"}
+              title={
+                holdsYes
+                  ? "Sell your Yes position before buying No (PRD position constraint)"
+                  : bestBid
+                    ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
+                    : "No bid available"
+              }
             >
               {busy === "Buy No" ? "..." : "Buy No"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null}
+              disabled={!trade.ready || busy !== null || !holdsYes}
               onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty))}
               className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
+              title={!holdsYes ? "Need Yes tokens to sell" : ""}
             >
               {busy === "Sell Yes" ? "..." : "Sell Yes"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null || !bestAsk}
+              disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo}
               onClick={() =>
                 run("Sell No", () =>
                   trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
                 )
               }
               className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
-              title={bestAsk ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}` : "No ask available"}
+              title={
+                !holdsNo
+                  ? "Need No tokens to sell"
+                  : bestAsk
+                    ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
+                    : "No ask available"
+              }
             >
               {busy === "Sell No" ? "..." : "Sell No"}
             </button>
