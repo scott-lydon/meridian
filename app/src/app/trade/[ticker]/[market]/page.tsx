@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -65,9 +65,9 @@ function useOrderBookFor(marketPubkey: string) {
 export default function TradePage({
   params,
 }: {
-  params: Promise<{ ticker: string; market: string }>;
+  params: { ticker: string; market: string };
 }) {
-  const { ticker, market } = use(params);
+  const { ticker, market } = params;
   const { data: markets } = useMarkets();
   const { data: book, isLoading: bookLoading } = useOrderBookFor(market);
   const { publicKey } = useWallet();
