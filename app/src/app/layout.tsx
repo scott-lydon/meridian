@@ -2,6 +2,9 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
+import { MeridianProviders } from "@/components/WalletProvider";
+import { Header } from "@/components/Header";
+
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
@@ -33,7 +36,12 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable}`}>
-      <body className="min-h-screen bg-bg font-sans text-text antialiased">{children}</body>
+      <body className="min-h-screen bg-bg font-sans text-text antialiased">
+        <MeridianProviders>
+          <Header />
+          {children}
+        </MeridianProviders>
+      </body>
     </html>
   );
 }
