@@ -27,7 +27,7 @@ pub struct Redeem<'info> {
         seeds = [CONFIG_SEED, &[PROGRAM_VERSION]],
         bump = config.bump,
     )]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     #[account(
         mut,
@@ -35,7 +35,7 @@ pub struct Redeem<'info> {
         has_one = yes_mint @ MeridianError::WrongTokenMint,
         has_one = no_mint @ MeridianError::WrongTokenMint,
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     /// CHECK: PDA signer.
     #[account(
@@ -49,17 +49,17 @@ pub struct Redeem<'info> {
         seeds = [YES_MINT_SEED, market.key().as_ref(), &[PROGRAM_VERSION]],
         bump = market.yes_mint_bump,
     )]
-    pub yes_mint: Account<'info, anchor_spl::token::Mint>,
+    pub yes_mint: Box<Account<'info, anchor_spl::token::Mint>>,
 
     #[account(
         mut,
         seeds = [NO_MINT_SEED, market.key().as_ref(), &[PROGRAM_VERSION]],
         bump = market.no_mint_bump,
     )]
-    pub no_mint: Account<'info, anchor_spl::token::Mint>,
+    pub no_mint: Box<Account<'info, anchor_spl::token::Mint>>,
 
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     /// USDC destination for the redeemer.
     #[account(
@@ -67,7 +67,7 @@ pub struct Redeem<'info> {
         token::mint = config.usdc_mint,
         token::authority = user,
     )]
-    pub user_usdc: Account<'info, TokenAccount>,
+    pub user_usdc: Box<Account<'info, TokenAccount>>,
 
     /// User's Yes ATA. Mutated only when side == Yes.
     #[account(
@@ -75,7 +75,7 @@ pub struct Redeem<'info> {
         token::mint = yes_mint,
         token::authority = user,
     )]
-    pub user_yes: Account<'info, TokenAccount>,
+    pub user_yes: Box<Account<'info, TokenAccount>>,
 
     /// User's No ATA. Mutated only when side == No.
     #[account(
@@ -83,7 +83,7 @@ pub struct Redeem<'info> {
         token::mint = no_mint,
         token::authority = user,
     )]
-    pub user_no: Account<'info, TokenAccount>,
+    pub user_no: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
     pub user: Signer<'info>,

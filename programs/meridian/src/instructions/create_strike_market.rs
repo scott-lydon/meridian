@@ -19,7 +19,7 @@ use crate::error::MeridianError;
 use crate::state::{Config, Market, Outcome};
 
 #[derive(Accounts)]
-#[instruction(trading_day_unix: i64, ticker: [u8; TICKER_LEN], strike_usd_micros: u64, expiry_unix: i64)]
+#[instruction(trading_day_unix: i64, ticker: [u8; TICKER_LEN], strike_usd_micros: u64, expiry_unix: i64, pyth_feed_id: [u8; 32])]
 pub struct CreateStrikeMarket<'info> {
     #[account(
         seeds = [CONFIG_SEED, &[PROGRAM_VERSION]],
@@ -100,27 +100,19 @@ pub fn handler(
     ticker: [u8; TICKER_LEN],
     strike_usd_micros: u64,
     expiry_unix: i64,
+    pyth_feed_id: [u8; 32],
 ) -> Result<()> {
     require!(strike_usd_micros > 0, MeridianError::InvalidStrike);
     require!(trading_day_unix > 0, MeridianError::InvalidTradingDay);
 
-    let config = &ctx.accounts.config;
-
-    // Find the Pyth feed for this ticker in Config. Reject unknown tickers.
-    let feed = config
-        .pyth_feeds
-        .iter()
-        .find(|f| f.ticker == ticker)
-        .ok_or(MeridianError::UnknownTicker)?;
-
     let clock = Clock::get()?;
     let admin_override_earliest = clock
         .unix_timestamp
-        .checked_add(config.admin_override_delay_secs)
+        .checked_add(ctx.accounts.config.admin_override_delay_secs)
         .ok_or(MeridianError::MathOverflow)?;
 
     let market = &mut ctx.accounts.market;
-    market.config = config.key();
+    market.config = ctx.accounts.config.key();
     market.trading_day_unix = trading_day_unix;
     market.ticker = ticker;
     market.strike_usd_micros = strike_usd_micros;
@@ -133,7 +125,7 @@ pub fn handler(
     market.created_at_unix = clock.unix_timestamp;
     market.expiry_unix = expiry_unix;
     market.admin_override_earliest = admin_override_earliest;
-    market.pyth_feed_id = feed.feed_id;
+    market.pyth_feed_id = pyth_feed_id;
     market.outcome = Outcome::pending();
     market.bump = ctx.bumps.market;
     market.version = PROGRAM_VERSION;

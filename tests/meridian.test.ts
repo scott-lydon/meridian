@@ -21,6 +21,8 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { describe, it, beforeAll, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 const PROGRAM_VERSION = 1;
 const CONFIG_SEED = Buffer.from("config");
@@ -63,9 +65,14 @@ describe("meridian slice 1", () => {
   beforeAll(async () => {
     provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
+    // Load IDL directly from target/ instead of going through anchor.workspace
+    // (which reads Anchor.toml from cwd and breaks under vitest).
+    const idlPath = resolvePath(__dirname, "..", "target", "idl", "meridian.json");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    program = (anchor.workspace as any).Meridian;
-    if (!program) throw new Error("workspace.Meridian missing; run `anchor build`");
+    const idl: any = JSON.parse(readFileSync(idlPath, "utf-8"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    program = new (anchor as any).Program(idl, provider);
+    if (!program) throw new Error(`could not load program from ${idlPath}`);
 
     admin = (provider.wallet as anchor.Wallet).payer;
     user = Keypair.generate();
@@ -113,14 +120,8 @@ describe("meridian slice 1", () => {
   });
 
   it("initialize_config", async () => {
-    // Build pyth_feeds with the META feed populated; rest can be zero for slice 1.
-    const pythFeeds = Array.from({ length: 7 }).map((_, i) => ({
-      ticker: padTicker(["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"][i] ?? ""),
-      feedId: Array.from(Buffer.alloc(32)),
-    }));
-
     await program.methods
-      .initializeConfig(pythFeeds)
+      .initializeConfig()
       .accounts({
         config: configPda,
         usdcMint,
@@ -139,9 +140,11 @@ describe("meridian slice 1", () => {
     // vault is an ATA derived later; let the IX init it.
     const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
     vaultAta = getAssociatedTokenAddressSync(usdcMint, vaultAuthPda, true);
+    // Pyth feed id placeholder for slice 1 (slice 2 verifies on-chain).
+    const pythFeedId = Array.from(Buffer.alloc(32));
 
     await program.methods
-      .createStrikeMarket(tradingDay, ticker, strikeMicros, expiry)
+      .createStrikeMarket(tradingDay, ticker, strikeMicros, expiry, pythFeedId)
       .accounts({
         config: configPda,
         market: marketPda,

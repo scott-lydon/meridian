@@ -20,7 +20,7 @@ wallet = "~/.config/solana/id.json"
 members = ["programs/meridian"]
 
 [scripts]
-test = "pnpm exec tsx --import tsx tests/scaffold.test.ts"
+test = "pnpm --filter @meridian/tests exec vitest run"
 
 [toolchain]
 anchor_version = "0.31.1"

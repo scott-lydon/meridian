@@ -3,19 +3,20 @@ packages:
   - automation
   - tests
 
-# These packages have native build steps (compiled bindings, esbuild binaries,
-# etc.). Approving them lets pnpm run their postinstall scripts.
-# Reviewed 2026-05-21: all are legitimate transitive deps of the Solana stack
-# (web3.js -> bigint-buffer, tiny-secp256k1; wallet adapter -> usb, blake-hash;
-# Next.js -> esbuild, unrs-resolver; ws -> bufferutil, utf-8-validate).
-onlyBuiltDependencies:
-  - "@stellar/stellar-sdk"
-  - bigint-buffer
-  - blake-hash
-  - bufferutil
-  - esbuild
-  - protobufjs
-  - tiny-secp256k1
-  - unrs-resolver
-  - usb
-  - utf-8-validate
+# pnpm 11 native-build approval. Each listed dep is a legitimate transitive
+# of the Solana / Next.js stack; postinstall scripts compile native bindings
+# or download platform-specific binaries.
+# Reviewed 2026-05-21: web3.js -> bigint-buffer + tiny-secp256k1; wallet
+# adapter -> usb + blake-hash; Next.js -> esbuild + unrs-resolver;
+# ws -> bufferutil + utf-8-validate; protobufjs builds its prebuilt JS.
+allowBuilds:
+  "@stellar/stellar-sdk": true
+  bigint-buffer: true
+  blake-hash: true
+  bufferutil: true
+  esbuild: true
+  protobufjs: true
+  tiny-secp256k1: true
+  unrs-resolver: true
+  usb: true
+  utf-8-validate: true

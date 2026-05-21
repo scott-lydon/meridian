@@ -24,7 +24,7 @@ pub struct MintPair<'info> {
         seeds = [crate::constants::CONFIG_SEED, &[PROGRAM_VERSION]],
         bump = config.bump,
     )]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     #[account(
         mut,
@@ -32,7 +32,7 @@ pub struct MintPair<'info> {
         has_one = yes_mint @ MeridianError::WrongTokenMint,
         has_one = no_mint @ MeridianError::WrongTokenMint,
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
     /// CHECK: PDA, signs the mint cpi via seeds.
     #[account(
@@ -46,17 +46,17 @@ pub struct MintPair<'info> {
         seeds = [YES_MINT_SEED, market.key().as_ref(), &[PROGRAM_VERSION]],
         bump = market.yes_mint_bump,
     )]
-    pub yes_mint: Account<'info, Mint>,
+    pub yes_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
         seeds = [NO_MINT_SEED, market.key().as_ref(), &[PROGRAM_VERSION]],
         bump = market.no_mint_bump,
     )]
-    pub no_mint: Account<'info, Mint>,
+    pub no_mint: Box<Account<'info, Mint>>,
 
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
 
     /// User's USDC source account.
     #[account(
@@ -64,7 +64,7 @@ pub struct MintPair<'info> {
         token::mint = config.usdc_mint,
         token::authority = user,
     )]
-    pub user_usdc: Account<'info, TokenAccount>,
+    pub user_usdc: Box<Account<'info, TokenAccount>>,
 
     /// User's Yes destination ATA.
     #[account(
@@ -72,7 +72,7 @@ pub struct MintPair<'info> {
         token::mint = yes_mint,
         token::authority = user,
     )]
-    pub user_yes: Account<'info, TokenAccount>,
+    pub user_yes: Box<Account<'info, TokenAccount>>,
 
     /// User's No destination ATA.
     #[account(
@@ -80,7 +80,7 @@ pub struct MintPair<'info> {
         token::mint = no_mint,
         token::authority = user,
     )]
-    pub user_no: Account<'info, TokenAccount>,
+    pub user_no: Box<Account<'info, TokenAccount>>,
 
     #[account(mut)]
     pub user: Signer<'info>,

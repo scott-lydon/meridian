@@ -7,13 +7,19 @@
 
 use anchor_lang::prelude::*;
 
-use crate::constants::{MAX_TICKERS, TICKER_LEN};
+use crate::constants::TICKER_LEN;
 
 // ===========================================================================
 // Config — one per program deployment.
 // ===========================================================================
 
 /// Global program configuration set once at deploy time by the admin.
+///
+/// Note: Pyth feeds intentionally live OFF this account. Storing the 7
+/// feeds inline blew the on-chain BPF stack when create_strike_market
+/// deserialized Config (Anchor copies through the stack). Feeds are now
+/// either (a) passed directly to create_strike_market by the admin, or
+/// (b) verified via the Pyth receiver SDK at settle time (slice 2).
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -21,8 +27,6 @@ pub struct Config {
     pub admin: Pubkey,                                   // 32
     /// Devnet USDC mint (Circle's official); recorded so callers can verify.
     pub usdc_mint: Pubkey,                               // 32
-    /// One Pyth feed per MAG7 ticker.
-    pub pyth_feeds: [PythFeedConfig; MAX_TICKERS],       // 7 * 38 = 266
     /// Reject Pyth prices older than this many seconds at settlement.
     pub max_staleness_secs: u64,                         // 8
     /// Reject Pyth prices whose confidence exceeds this many basis points
@@ -41,18 +45,22 @@ pub struct Config {
 }
 
 impl Config {
-    /// 8 (discriminator) + 32 + 32 + 266 + 8 + 2 + 8 + 1 + 1 + 1.
-    pub const LEN: usize = 8 + 32 + 32 + (TICKER_LEN + 32) * MAX_TICKERS + 8 + 2 + 8 + 1 + 1 + 1;
+    /// 8 (discriminator) + 32 + 32 + 8 + 2 + 8 + 1 + 1 + 1.
+    pub const LEN: usize = 8 + 32 + 32 + 8 + 2 + 8 + 1 + 1 + 1;
 }
 
-/// One ticker, one Pyth feed.
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, InitSpace, PartialEq, Eq, Debug)]
+/// One ticker, one Pyth feed. Used only by client-side configuration
+/// helpers; not stored on-chain in slice 1.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PythFeedConfig {
     /// ASCII ticker symbol, null-padded right (e.g. b"AAPL\0\0").
     pub ticker: [u8; TICKER_LEN],
     /// Pyth feed id (32-byte hash).
     pub feed_id: [u8; 32],
 }
+
+// Suppress unused warning when MAX_TICKERS isn't used by any on-chain struct.
+const _: usize = crate::constants::MAX_TICKERS;
 
 // ===========================================================================
 // Market — one per (trading-day, ticker, strike) tuple.

@@ -28,7 +28,6 @@ pub mod state;
 
 use crate::constants::TICKER_LEN;
 use crate::instructions::*;
-use crate::state::PythFeedConfig;
 
 declare_id!("499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s");
 
@@ -36,22 +35,23 @@ declare_id!("499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s");
 pub mod meridian {
     use super::*;
 
-    /// One-time program setup. Admin signs, records USDC mint + Pyth feeds.
-    pub fn initialize_config(
-        ctx: Context<InitializeConfig>,
-        pyth_feeds: [PythFeedConfig; constants::MAX_TICKERS],
-    ) -> Result<()> {
-        instructions::initialize_config::handler(ctx, pyth_feeds)
+    /// One-time program setup. Admin signs, records USDC mint + thresholds.
+    /// Pyth feeds attach via the per-market `pyth_feed_id` param in slice 1
+    /// and via a dedicated registry in slice 2.
+    pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
+        instructions::initialize_config::handler(ctx)
     }
 
     /// Admin creates one market: one (trading-day, ticker, strike) tuple.
-    /// Initializes Yes/No mints, vault, and Market PDA.
+    /// Initializes Yes/No mints, vault, and Market PDA. `pyth_feed_id`
+    /// is stored on the market so settle_market (slice 2) can verify on chain.
     pub fn create_strike_market(
         ctx: Context<CreateStrikeMarket>,
         trading_day_unix: i64,
         ticker: [u8; TICKER_LEN],
         strike_usd_micros: u64,
         expiry_unix: i64,
+        pyth_feed_id: [u8; 32],
     ) -> Result<()> {
         instructions::create_strike_market::handler(
             ctx,
@@ -59,6 +59,7 @@ pub mod meridian {
             ticker,
             strike_usd_micros,
             expiry_unix,
+            pyth_feed_id,
         )
     }
 
