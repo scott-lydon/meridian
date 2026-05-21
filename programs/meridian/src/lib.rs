@@ -31,7 +31,7 @@ use crate::constants::TICKER_LEN;
 use crate::instructions::*;
 use crate::order_book::OrderSide;
 
-declare_id!("499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s");
+declare_id!("ERtAbZetHFVmFKyTzfJd9LdMGsqu5b2TWeWc65sikPaX");
 
 #[program]
 pub mod meridian {
