@@ -5,7 +5,7 @@
 import { request } from "undici";
 import { z } from "zod";
 
-import { logger } from "@/lib/logger";
+import { logger } from "./logger.js";
 
 const HERMES_PARSED = z.object({
   parsed: z.array(

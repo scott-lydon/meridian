@@ -2,7 +2,7 @@
 // rounded to the nearest $10, deduplicated. The PRD calls out the AAPL
 // edge case where -3% and -6% round to the same $10 step.
 
-import type { PythTicker } from "@/lib/pyth";
+import type { PythTicker } from "./pyth.js";
 
 const STEP_USD = 10;
 const OFFSETS = [-0.09, -0.06, -0.03, 0, 0.03, 0.06, 0.09] as const;

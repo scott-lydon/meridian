@@ -3,6 +3,7 @@
 // (no catch-log-continue) and the user's preference for clear error messages.
 
 import { z } from "zod";
+// IMPORTANT: kept the alias `pythFeedFor` as the canonical export.
 
 const TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] as const;
 export type Ticker = (typeof TICKERS)[number];

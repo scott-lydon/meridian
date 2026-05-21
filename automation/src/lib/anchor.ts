@@ -1,0 +1,105 @@
+// Anchor client + Solana connection for the automation service.
+
+import * as anchor from "@coral-xyz/anchor";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { readFileSync } from "node:fs";
+
+import idl from "../idl/meridian.json" with { type: "json" };
+import type { Env } from "./env.js";
+
+export interface AnchorContext {
+  readonly connection: Connection;
+  readonly provider: anchor.AnchorProvider;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly program: anchor.Program<any>;
+  readonly automationKeypair: Keypair;
+  readonly adminKeypair: Keypair;
+  readonly programId: PublicKey;
+}
+
+function loadKeypair(path: string): Keypair {
+  const raw = readFileSync(path, "utf-8");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const arr: any = JSON.parse(raw);
+  if (!Array.isArray(arr) || arr.length !== 64) {
+    throw new Error(`keypair at ${path} is not a 64-byte secret-key JSON array`);
+  }
+  return Keypair.fromSecretKey(Uint8Array.from(arr));
+}
+
+export function buildAnchor(env: Env): AnchorContext {
+  const connection = new Connection(env.SOLANA_RPC_URL, {
+    commitment: "confirmed",
+    wsEndpoint: env.SOLANA_WS_URL,
+  });
+  const automationKeypair = loadKeypair(env.AUTOMATION_KEYPAIR_PATH);
+  const adminKeypair = loadKeypair(env.ADMIN_KEYPAIR_PATH);
+
+  const wallet: anchor.Wallet = {
+    publicKey: automationKeypair.publicKey,
+    payer: automationKeypair,
+    signTransaction: async (tx) => {
+      // @ts-expect-error v1 vs vt signing
+      tx.partialSign(automationKeypair);
+      return tx;
+    },
+    signAllTransactions: async (txs) => {
+      // @ts-expect-error v1 vs vt signing
+      txs.forEach((t) => t.partialSign(automationKeypair));
+      return txs;
+    },
+  };
+
+  const provider = new anchor.AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const program = new (anchor as any).Program(idl, provider);
+  return {
+    connection,
+    provider,
+    program,
+    automationKeypair,
+    adminKeypair,
+    programId: new PublicKey(env.MERIDIAN_PROGRAM_ID),
+  };
+}
+
+// PDA helpers (mirror programs/meridian/src/constants.rs)
+export const PROGRAM_VERSION_BYTE = Buffer.from([1]);
+export const CONFIG_SEED = Buffer.from("config");
+export const MARKET_SEED = Buffer.from("market");
+export const VAULT_AUTH_SEED = Buffer.from("vault_auth");
+export const YES_MINT_SEED = Buffer.from("yes_mint");
+export const NO_MINT_SEED = Buffer.from("no_mint");
+export const TICKER_LEN = 6;
+
+export function pad6(s: string): Buffer {
+  const buf = Buffer.alloc(TICKER_LEN);
+  buf.write(s.toUpperCase(), "ascii");
+  return buf;
+}
+
+export function configPda(programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [CONFIG_SEED, PROGRAM_VERSION_BYTE],
+    programId,
+  )[0];
+}
+
+export function marketPda(
+  programId: PublicKey,
+  tradingDayUnix: bigint,
+  ticker: string,
+  strikeUsdMicros: bigint,
+): PublicKey {
+  const tickerBuf = pad6(ticker);
+  const day = Buffer.alloc(8);
+  day.writeBigInt64LE(tradingDayUnix);
+  const strike = Buffer.alloc(8);
+  strike.writeBigUInt64LE(strikeUsdMicros);
+  return PublicKey.findProgramAddressSync(
+    [MARKET_SEED, day, tickerBuf, strike, PROGRAM_VERSION_BYTE],
+    programId,
+  )[0];
+}
