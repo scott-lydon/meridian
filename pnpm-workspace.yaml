@@ -3,6 +3,12 @@ packages:
   - automation
   - tests
 
+# Pin rpc-websockets to 7.5.1: 8.x+ removed the deep-import exports that
+# @solana/web3.js 1.x still uses internally; breaks under Node 22's strict
+# ESM resolution with ERR_PACKAGE_PATH_NOT_EXPORTED.
+overrides:
+  rpc-websockets: "7.5.1"
+
 # pnpm 11 native-build approval. Each listed dep is a legitimate transitive
 # of the Solana / Next.js stack; postinstall scripts compile native bindings
 # or download platform-specific binaries.
