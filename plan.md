@@ -402,17 +402,17 @@ Node service with morning cron, settlement cron, NYSE calendar check, retry poli
 | Automation `/health` uptime | > 99% during US market hours | Render uptime + log audit |
 | Test suite total runtime | < 60s | CI duration |
 
-## 8. Open questions (must be closed before tasks.md decomposes them)
+## 8. Locked decisions (resolutions of the questions the plan parked)
 
-These are decisions the plan leaves for the next refinement pass. Each is a single question with a recommended answer; the user confirms or overrides.
+These were open questions; the user locked them in to their recommended defaults on 2026-05-20. Each becomes a normative line of the plan. Overrides require a separate amendment commit.
 
-- **Q1: Devnet faucet UX.** Should the frontend embed a "Get devnet USDC" button that hits the Circle faucet, or link out? Recommended: embed via the official Circle faucet API; falls back to a link if the API rate-limits the user.
-- **Q2: Crank wallet funding.** The cranker keypair pays SOL for match transactions. Funded from a deployer wallet at deploy time, topped up manually as needed. Recommended: starting balance 5 SOL; alert when below 1.
-- **Q3: Per-market order book capacity.** 256 entries per side. Sufficient for the demo. Recommended: parameterize in `Config` so v1.1 can raise it without a redeploy.
-- **Q4: Order book event queue.** Slice 3 ships without one (matches complete synchronously inside `match_orders`). Recommended: defer until we hit a transaction-size limit in testing.
-- **Q5: How do we represent USDC base units in the frontend?** Recommended: branded type `UsdcBase = bigint & { __brand }` everywhere; render functions convert to `string` with explicit 2-decimal formatting. Avoid `number` for money.
-- **Q6: When the morning job runs at 08:00 ET, does Pyth have the previous close yet?** Pyth's stock-equity feeds update during US market hours; the 4:00 PM ET close is available by 08:00 ET the next morning. Recommended: assume yes; the morning job logs the publish_time of every price it reads, so any drift is debuggable.
-- **Q7: Order book empty state.** Recommended: show "Be the first to quote — Mint pair to provide liquidity" with a Mint Pair button.
+- **D1: Devnet faucet UX.** The frontend embeds a "Get devnet USDC" button that hits Circle's official devnet USDC faucet. On rate-limit (HTTP 429), it falls back to a clickable link to the faucet page so the user can complete the request manually. Implementation: `src/lib/faucet.ts` with one exported `requestDevnetUsdc(address)` function.
+- **D2: Crank wallet funding.** The cranker keypair starts with 5 SOL. The automation service polls the cranker's balance every 5 minutes; when it drops below 1 SOL, fires a Slack alert with a manual top-up link. No auto-top-up in v1 (keeps the admin in the loop on funding).
+- **D3: Per-market order book capacity.** 256 entries per side. The capacity is stored in `Config.order_book_max_depth` so v1.1 can raise it without a program redeploy by initializing new markets at the new value. Existing markets retain their original capacity.
+- **D4: Order book event queue.** Slice 3 ships WITHOUT an event queue; matches complete synchronously inside `match_orders`. If a single `match_orders` invocation hits the Solana per-tx CU limit (1.4M) or account-list cap (64), we add an event queue in a follow-up slice. Sized correctly for v1 at 2-fill-per-match ceilings; documented in `tests/cu-profile/`.
+- **D5: USDC representation in the frontend.** Branded type: `type UsdcBase = bigint & { readonly __brand: 'UsdcBase' }`. All arithmetic in base units. Conversion to display happens at the React leaf via a `formatUsdc(amount: UsdcBase): string` function that returns two-decimal strings. The `number` type is forbidden for money values; ESLint rule `no-restricted-syntax` enforces it.
+- **D6: Pyth feed timing for the morning job.** Assume Pyth has the previous trading day's 4:00 PM ET close available by 08:00 ET the next morning (Pyth Network's stock-equity feeds publish during US market hours and the last published price persists). The morning job logs `publish_time` for every price it reads, so any drift is immediately debuggable from the log. If Pyth devnet does NOT carry MAG7 stock-equity feeds, slice 2 surfaces this as a hard failure and we pivot to Switchboard (decision #4 reversal documented as an amendment).
+- **D7: Order book empty state.** Empty bid AND empty ask sides render a single panel: "Be the first to quote — Mint pair to provide liquidity" with a primary "Mint Pair" button. Empty-only-one-side renders normally (the other side is the source of liquidity for IOC orders). The trade panel disables Market orders when the relevant side is empty, with a tooltip explaining why; limit orders remain available.
 
 ## 9. References
 
