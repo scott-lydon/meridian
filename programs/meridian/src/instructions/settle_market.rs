@@ -42,32 +42,49 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
 
     let pu = &ctx.accounts.price_update;
     let feed_id = pu.price_message.feed_id;
-    require!(
-        feed_id == market.pyth_feed_id,
-        MeridianError::OracleFeedMismatch
-    );
+    if feed_id != market.pyth_feed_id {
+        msg!(
+            "OracleFeedMismatch: price_update.feed_id={:?} but market expects feed_id={:?}",
+            feed_id,
+            market.pyth_feed_id
+        );
+        return err!(MeridianError::OracleFeedMismatch);
+    }
 
-    // Staleness check
+    // Staleness check (expressive)
     let publish_time = pu.price_message.publish_time;
     let age = now.saturating_sub(publish_time);
-    require!(
-        age >= 0 && (age as u64) <= ctx.accounts.config.max_staleness_secs,
-        MeridianError::OraclePriceStale
-    );
+    if age < 0 || (age as u64) > ctx.accounts.config.max_staleness_secs {
+        msg!(
+            "OraclePriceStale: now={} publish_time={} age={}s but max_staleness={}s",
+            now,
+            publish_time,
+            age,
+            ctx.accounts.config.max_staleness_secs
+        );
+        return err!(MeridianError::OraclePriceStale);
+    }
 
-    // Price + confidence
     let raw_price = pu.price_message.price;
     let raw_conf = pu.price_message.conf;
     let exponent = pu.price_message.exponent;
-    require!(raw_price > 0, MeridianError::OracleUpdateMissing);
+    if raw_price <= 0 {
+        msg!("OracleUpdateMissing: raw_price={} (must be > 0)", raw_price);
+        return err!(MeridianError::OracleUpdateMissing);
+    }
 
-    // confidence in basis points: conf * 10_000 / price
     let conf_bps: u128 = (u128::from(raw_conf) * 10_000)
         / u128::try_from(raw_price).map_err(|_| MeridianError::OracleUpdateMissing)?;
-    require!(
-        conf_bps <= u128::from(ctx.accounts.config.max_confidence_bps),
-        MeridianError::OracleConfidenceTooWide
-    );
+    if conf_bps > u128::from(ctx.accounts.config.max_confidence_bps) {
+        msg!(
+            "OracleConfidenceTooWide: conf_bps={} > max_confidence_bps={} (raw_conf={}, raw_price={})",
+            conf_bps,
+            ctx.accounts.config.max_confidence_bps,
+            raw_conf,
+            raw_price
+        );
+        return err!(MeridianError::OracleConfidenceTooWide);
+    }
 
     // Scale price to USDC base units (6 decimals).
     // closing_price_micros = raw_price * 10^(exponent + 6)

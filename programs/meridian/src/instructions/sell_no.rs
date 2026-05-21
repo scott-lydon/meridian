@@ -138,23 +138,43 @@ pub fn handler(
 
     let (ask_price_ticks, ask_owner) = {
         let book = ctx.accounts.order_book.load()?;
-        require_keys_eq!(
-            book.yes_escrow,
-            ctx.accounts.yes_escrow.key(),
-            MeridianError::WrongVaultAccount
-        );
-        require!(book.asks_len > 0, MeridianError::IocPartialFillRejected);
+        if book.yes_escrow != ctx.accounts.yes_escrow.key() {
+            msg!(
+                "WrongVaultAccount: yes_escrow supplied={} but book records={}",
+                ctx.accounts.yes_escrow.key(),
+                book.yes_escrow
+            );
+            return err!(MeridianError::WrongVaultAccount);
+        }
+        if book.asks_len == 0 {
+            msg!("IocPartialFillRejected: no asks in book — sell_no needs liquidity");
+            return err!(MeridianError::IocPartialFillRejected);
+        }
         let ask = book.asks[0];
-        require!(ask.qty >= qty, MeridianError::IocPartialFillRejected);
-        require!(
-            ask.price_ticks <= max_ask_price_ticks,
-            MeridianError::IocPartialFillRejected
-        );
-        require_keys_eq!(
-            ctx.accounts.ask_maker_usdc.owner,
-            ask.owner,
-            MeridianError::OrderNotFound
-        );
+        if ask.qty < qty {
+            msg!(
+                "IocPartialFillRejected: best_ask_qty={} < requested_qty={}",
+                ask.qty,
+                qty
+            );
+            return err!(MeridianError::IocPartialFillRejected);
+        }
+        if ask.price_ticks > max_ask_price_ticks {
+            msg!(
+                "IocPartialFillRejected (slippage): best_ask_price={} > max_allowed={}",
+                ask.price_ticks,
+                max_ask_price_ticks
+            );
+            return err!(MeridianError::IocPartialFillRejected);
+        }
+        if ctx.accounts.ask_maker_usdc.owner != ask.owner {
+            msg!(
+                "OrderNotFound: ask_maker_usdc.owner={} but best_ask.owner={} — caller supplied wrong maker ATA",
+                ctx.accounts.ask_maker_usdc.owner,
+                ask.owner
+            );
+            return err!(MeridianError::OrderNotFound);
+        }
         (ask.price_ticks, ask.owner)
     };
 

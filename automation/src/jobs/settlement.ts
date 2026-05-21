@@ -1,12 +1,11 @@
 // Settlement job — 16:05 ET on every US trading day.
 //
-// For each unsettled Market today: fetch Pyth close, compute outcome.
-// Slice 9 v1 calls `admin_settle` (admin override path is the only one
-// that exists pre-Pyth-on-chain). Slice 2 replaces this with a real
-// settle_market that reads Pyth on-chain.
+// Primary path: `settle_market` reads Pyth on-chain via the receiver SDK.
+// The cranker posts a fresh PriceUpdateV2 then calls settle_market which
+// validates feed_id + staleness + confidence and writes the outcome.
 //
-// Retry policy: per-ticker, every 30s for up to 15min. Alert + manual
-// override if still failing.
+// Fallback path: `admin_settle` (admin-signed, time-delayed by 1 hour).
+// Used only when Pyth has been unavailable for 15 minutes.
 
 import * as anchor from "@coral-xyz/anchor";
 
@@ -17,6 +16,7 @@ import { isUsTradingDay, tradingDayUnix } from "../lib/calendar.js";
 import { buildAnchor, configPda } from "../lib/anchor.js";
 import { SlackAlerter } from "../lib/alerts.js";
 import { MAG7_TICKERS, pythFeedFor } from "../lib/env.js";
+import { settleMarketWithPyth } from "../lib/pyth-onchain.js";
 
 const SETTLEMENT_RETRY_INTERVAL_MS = 30_000;
 const SETTLEMENT_RETRY_WINDOW_MS = 15 * 60 * 1000;
@@ -24,7 +24,8 @@ const USDC_BASE = 1_000_000n;
 
 export interface SettlementResult {
   readonly tradingDay: number;
-  readonly settled: number;
+  readonly settledViaPyth: number;
+  readonly settledViaAdmin: number;
   readonly stillOpen: number;
 }
 
@@ -32,16 +33,15 @@ export async function runSettlementJob(env: Env): Promise<SettlementResult> {
   const now = new Date();
   if (!isUsTradingDay(now)) {
     logger.info({ date: now.toISOString() }, "not a US trading day; skipping settlement");
-    return { tradingDay: 0, settled: 0, stillOpen: 0 };
+    return { tradingDay: 0, settledViaPyth: 0, settledViaAdmin: 0, stillOpen: 0 };
   }
 
   const ctx = buildAnchor(env);
   const pyth = new PythClient(env.PYTH_HERMES_URL);
   const alerter = new SlackAlerter(env.SLACK_WEBHOOK_URL);
   const day = tradingDayUnix(now);
-  logger.info({ tradingDay: day }, "settlement job starting");
+  logger.info({ tradingDay: day }, "settlement job starting (Pyth primary, admin fallback)");
 
-  // Fetch all today's markets and filter unsettled ones.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allMarkets: any[] = await (ctx.program.account as any).market.all();
   const todays = allMarkets.filter(
@@ -51,57 +51,60 @@ export async function runSettlementJob(env: Env): Promise<SettlementResult> {
   );
   logger.info({ count: todays.length }, "unsettled markets today");
 
-  // For each ticker, fetch its closing price once and reuse across strikes.
-  const closes = new Map<PythTicker, number>();
-  for (const ticker of MAG7_TICKERS) {
-    let attempts = 0;
-    const start = Date.now();
-    while (Date.now() - start < SETTLEMENT_RETRY_WINDOW_MS) {
-      attempts += 1;
-      try {
-        const p = await pyth.getLatest(pythFeedFor(env, ticker));
-        if (!p) throw new Error("no price published");
-        if (p.confBps > env.PYTH_MAX_CONFIDENCE_BPS) {
-          throw new Error(`conf too wide: ${p.confBps}bps > ${env.PYTH_MAX_CONFIDENCE_BPS}bps`);
-        }
-        closes.set(ticker, p.price);
-        logger.info(
-          { ticker, attempts, price: p.price, confBps: p.confBps },
-          "close obtained",
-        );
-        break;
-      } catch (err) {
-        logger.warn({ ticker, attempts, err: String(err) }, "pyth read failed; retrying");
-        await new Promise((r) => setTimeout(r, SETTLEMENT_RETRY_INTERVAL_MS));
-      }
-    }
-    if (!closes.has(ticker)) {
-      await alerter.fire({
-        title: `Settlement: oracle failed for ${ticker}`,
-        body: `Gave up after 15min retry window. Run admin_settle manually.`,
-        fields: { ticker, tradingDay: day },
-      });
-    }
-  }
-
-  let settled = 0;
+  let settledViaPyth = 0;
+  let settledViaAdmin = 0;
   let stillOpen = 0;
+
   for (const m of todays) {
     const ticker = decodeTicker(m.account.ticker) as PythTicker;
-    const closePrice = closes.get(ticker);
-    if (closePrice === undefined) {
+    if (!MAG7_TICKERS.includes(ticker)) {
+      logger.warn({ ticker }, "unknown ticker on market; skipping");
       stillOpen += 1;
       continue;
     }
-    const closeMicros = BigInt(Math.round(closePrice * Number(USDC_BASE)));
+    const feedId = pythFeedFor(env, ticker);
+
+    // Primary: settle_market via Pyth on-chain.
+    let pythSettled = false;
+    const start = Date.now();
+    let attempts = 0;
+    while (Date.now() - start < SETTLEMENT_RETRY_WINDOW_MS) {
+      attempts += 1;
+      try {
+        // Pre-flight: check Hermes confidence before paying gas to post on-chain.
+        const offchain = await pyth.getLatest(feedId);
+        if (!offchain) throw new Error("Hermes returned no price");
+        if (offchain.confBps > env.PYTH_MAX_CONFIDENCE_BPS) {
+          throw new Error(
+            `Hermes conf ${offchain.confBps}bps > max ${env.PYTH_MAX_CONFIDENCE_BPS}bps`,
+          );
+        }
+
+        const result = await settleMarketWithPyth(ctx, env.PYTH_HERMES_URL, m.publicKey, feedId);
+        logger.info(
+          { market: m.publicKey.toBase58(), ticker, sig: result.settleSig, attempts },
+          "settled via Pyth",
+        );
+        settledViaPyth += 1;
+        pythSettled = true;
+        break;
+      } catch (err) {
+        logger.warn(
+          { ticker, attempts, err: String(err) },
+          "Pyth settle attempt failed; retrying",
+        );
+        await new Promise((r) => setTimeout(r, SETTLEMENT_RETRY_INTERVAL_MS));
+      }
+    }
+    if (pythSettled) continue;
+
+    // Fallback: admin_settle. Will only succeed if 1hr override delay has passed.
     try {
-      // For slice 9 v1, we use admin_settle. Slice 2 swaps in settle_market
-      // (anyone-callable, on-chain Pyth verify). admin_settle ENFORCES
-      // the override delay, so it will only succeed if market.created_at +
-      // admin_override_delay_secs <= now. For freshly-created markets the
-      // delay blocks; this path is meant for the real fallback only.
+      const offchain = await pyth.getLatest(feedId);
+      if (!offchain) throw new Error("Hermes has no price for admin fallback");
+      const closeMicros = BigInt(Math.round(offchain.price * Number(USDC_BASE)));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (ctx.program.methods as any)
+      const sig = await (ctx.program.methods as any)
         .adminSettle(new anchor.BN(closeMicros.toString()))
         .accounts({
           config: configPda(ctx.programId),
@@ -110,29 +113,26 @@ export async function runSettlementJob(env: Env): Promise<SettlementResult> {
         })
         .signers([ctx.adminKeypair])
         .rpc();
-      settled += 1;
       logger.info(
-        { market: m.publicKey.toBase58(), ticker, close: closePrice },
-        "market settled",
+        { market: m.publicKey.toBase58(), ticker, sig },
+        "settled via admin fallback",
       );
+      settledViaAdmin += 1;
     } catch (err) {
       stillOpen += 1;
-      logger.error(
-        { market: m.publicKey.toBase58(), ticker, err: String(err) },
-        "settle failed",
-      );
+      await alerter.fire({
+        title: `Settlement: both Pyth and admin paths failed for ${ticker}`,
+        body: `Market ${m.publicKey.toBase58()} remains open. Manual intervention required.`,
+        fields: { ticker, tradingDay: day, err: String(err) },
+      });
     }
   }
 
-  if (stillOpen > 0) {
-    await alerter.fire({
-      title: "Meridian settlement incomplete",
-      body: `${stillOpen} markets still open after settlement run.`,
-      fields: { tradingDay: day, settled, stillOpen },
-    });
-  }
-  logger.info({ tradingDay: day, settled, stillOpen }, "settlement done");
-  return { tradingDay: day, settled, stillOpen };
+  logger.info(
+    { tradingDay: day, settledViaPyth, settledViaAdmin, stillOpen },
+    "settlement done",
+  );
+  return { tradingDay: day, settledViaPyth, settledViaAdmin, stillOpen };
 }
 
 function decodeTicker(bytes: number[] | Uint8Array): string {

@@ -137,29 +137,48 @@ pub fn handler(
     let vault_auth_bump = ctx.accounts.market.vault_authority_bump;
     let book_auth_bump = ctx.bumps.book_authority;
 
-    // Read best bid (immutable borrow scope).
+    // Read best bid (immutable borrow scope). Each failure path emits a msg!()
+    // BEFORE the require so the on-chain log surfaces the actual vs expected
+    // values — keeps debug-after-revert one log scan instead of a guess.
     let (bid_price_ticks, bid_owner) = {
         let book = ctx.accounts.order_book.load()?;
-        require_keys_eq!(
-            book.usdc_escrow,
-            ctx.accounts.usdc_escrow.key(),
-            MeridianError::WrongVaultAccount
-        );
-        require!(book.bids_len > 0, MeridianError::IocPartialFillRejected);
+        if book.usdc_escrow != ctx.accounts.usdc_escrow.key() {
+            msg!(
+                "WrongVaultAccount: usdc_escrow supplied={} but book records={}",
+                ctx.accounts.usdc_escrow.key(),
+                book.usdc_escrow
+            );
+            return err!(MeridianError::WrongVaultAccount);
+        }
+        if book.bids_len == 0 {
+            msg!("IocPartialFillRejected: no bids in book — buy_no needs liquidity");
+            return err!(MeridianError::IocPartialFillRejected);
+        }
         let bid = book.bids[0];
-        require!(
-            bid.qty >= qty,
-            MeridianError::IocPartialFillRejected
-        );
-        require!(
-            bid.price_ticks >= min_bid_price_ticks,
-            MeridianError::IocPartialFillRejected
-        );
-        require_keys_eq!(
-            ctx.accounts.bid_maker_yes.owner,
-            bid.owner,
-            MeridianError::OrderNotFound
-        );
+        if bid.qty < qty {
+            msg!(
+                "IocPartialFillRejected: best_bid_qty={} < requested_qty={}",
+                bid.qty,
+                qty
+            );
+            return err!(MeridianError::IocPartialFillRejected);
+        }
+        if bid.price_ticks < min_bid_price_ticks {
+            msg!(
+                "IocPartialFillRejected (slippage): best_bid_price={} < min_required={}",
+                bid.price_ticks,
+                min_bid_price_ticks
+            );
+            return err!(MeridianError::IocPartialFillRejected);
+        }
+        if ctx.accounts.bid_maker_yes.owner != bid.owner {
+            msg!(
+                "OrderNotFound: bid_maker_yes.owner={} but best_bid.owner={} — caller supplied wrong maker ATA",
+                ctx.accounts.bid_maker_yes.owner,
+                bid.owner
+            );
+            return err!(MeridianError::OrderNotFound);
+        }
         (bid.price_ticks, bid.owner)
     };
 
