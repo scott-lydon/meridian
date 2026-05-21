@@ -24,10 +24,12 @@ use anchor_lang::prelude::*;
 pub mod constants;
 pub mod error;
 pub mod instructions;
+pub mod order_book;
 pub mod state;
 
 use crate::constants::TICKER_LEN;
 use crate::instructions::*;
+use crate::order_book::OrderSide;
 
 declare_id!("499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s");
 
@@ -81,5 +83,32 @@ pub mod meridian {
     /// (the burn still succeeds; rent on the ATA returns to the user).
     pub fn redeem(ctx: Context<Redeem>, side: RedeemSide, qty: u64) -> Result<()> {
         instructions::redeem::handler(ctx, side, qty)
+    }
+
+    // ===== Slice 3: in-program order book =====
+
+    /// Admin creates the order-book PDA + escrow ATAs for a market.
+    pub fn init_order_book(ctx: Context<InitOrderBook>) -> Result<()> {
+        instructions::init_order_book::handler(ctx)
+    }
+
+    /// Post a limit order. Escrows the user's tokens and inserts a resting
+    /// order. Matching happens in a separate `match_orders` cranker.
+    pub fn place_order(
+        ctx: Context<PlaceOrder>,
+        side: OrderSide,
+        price_ticks: u32,
+        qty: u64,
+    ) -> Result<()> {
+        instructions::place_order::handler(ctx, side, price_ticks, qty)
+    }
+
+    /// Owner cancels an unfilled order, gets remaining escrow back.
+    pub fn cancel_order(
+        ctx: Context<CancelOrder>,
+        side: OrderSide,
+        sequence: u64,
+    ) -> Result<()> {
+        instructions::cancel_order::handler(ctx, side, sequence)
     }
 }

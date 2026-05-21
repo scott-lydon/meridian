@@ -280,3 +280,208 @@ describe("meridian slice 1", () => {
     expect(Number(vault.amount)).toBe(0);
   });
 });
+
+// =============================================================================
+// SLICE 3: in-program order book — init, place, cancel
+// =============================================================================
+
+const ORDER_BOOK_SEED = Buffer.from("book");
+const BOOK_AUTH_SEED = Buffer.from("book_auth");
+
+describe("meridian slice 3 — order book", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let program: any;
+  let provider: anchor.AnchorProvider;
+  let admin: Keypair;
+  let user: Keypair;
+  let usdcMint: PublicKey;
+  let configPda: PublicKey;
+  let marketPda: PublicKey;
+  let yesMintPda: PublicKey;
+  let noMintPda: PublicKey;
+  let vaultAuthPda: PublicKey;
+  let vaultAta: PublicKey;
+  let orderBookPda: PublicKey;
+  let bookAuthPda: PublicKey;
+  let usdcEscrow: PublicKey;
+  let yesEscrow: PublicKey;
+  let userUsdc: PublicKey;
+  let userYes: PublicKey;
+  let userNo: PublicKey;
+
+  // Fresh market for this describe so we don't conflict with slice 1's markets.
+  const ticker = padTicker("NVDA");
+  const tradingDay = new BN(Math.floor(Date.now() / 1000) + 100);
+  const strikeMicros = new BN(220 * USDC_BASE);
+  const expiry = tradingDay.add(new BN(16 * 3600));
+
+  beforeAll(async () => {
+    provider = anchor.AnchorProvider.env();
+    anchor.setProvider(provider);
+    const idlPath = resolvePath(__dirname, "..", "target", "idl", "meridian.json");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const idl: any = JSON.parse(readFileSync(idlPath, "utf-8"));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    program = new (anchor as any).Program(idl, provider);
+    admin = (provider.wallet as anchor.Wallet).payer;
+    user = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(user.publicKey, 2e9);
+    await provider.connection.confirmTransaction(sig, "confirmed");
+
+    // Read the USDC mint from the existing Config (slice 1 already initialized).
+    [configPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("config"), Buffer.from([1])],
+      program.programId,
+    );
+    const cfg = await program.account.config.fetch(configPda);
+    usdcMint = cfg.usdcMint;
+
+    [marketPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("market"),
+        tradingDay.toArrayLike(Buffer, "le", 8),
+        Buffer.from(ticker),
+        strikeMicros.toArrayLike(Buffer, "le", 8),
+        Buffer.from([1]),
+      ],
+      program.programId,
+    );
+    [vaultAuthPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault_auth"), marketPda.toBuffer(), Buffer.from([1])],
+      program.programId,
+    );
+    [yesMintPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("yes_mint"), marketPda.toBuffer(), Buffer.from([1])],
+      program.programId,
+    );
+    [noMintPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("no_mint"), marketPda.toBuffer(), Buffer.from([1])],
+      program.programId,
+    );
+    [orderBookPda] = PublicKey.findProgramAddressSync(
+      [ORDER_BOOK_SEED, marketPda.toBuffer(), Buffer.from([1])],
+      program.programId,
+    );
+    [bookAuthPda] = PublicKey.findProgramAddressSync(
+      [BOOK_AUTH_SEED, marketPda.toBuffer(), Buffer.from([1])],
+      program.programId,
+    );
+
+    // Create market for this slice
+    const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+    vaultAta = getAssociatedTokenAddressSync(usdcMint, vaultAuthPda, true);
+    usdcEscrow = getAssociatedTokenAddressSync(usdcMint, bookAuthPda, true);
+    yesEscrow = getAssociatedTokenAddressSync(yesMintPda, bookAuthPda, true);
+
+    const pythFeedId = Array.from(Buffer.alloc(32));
+    await program.methods
+      .createStrikeMarket(tradingDay, ticker, strikeMicros, expiry, pythFeedId)
+      .accounts({
+        config: configPda,
+        market: marketPda,
+        vaultAuthority: vaultAuthPda,
+        yesMint: yesMintPda,
+        noMint: noMintPda,
+        vault: vaultAta,
+        usdcMint,
+        admin: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+
+    // User funds
+    userUsdc = await createAssociatedTokenAccount(provider.connection, user, usdcMint, user.publicKey);
+    userYes = await createAssociatedTokenAccount(provider.connection, user, yesMintPda, user.publicKey);
+    userNo = await createAssociatedTokenAccount(provider.connection, user, noMintPda, user.publicKey);
+    await mintTo(provider.connection, admin, usdcMint, userUsdc, admin, 50 * USDC_BASE);
+  });
+
+  it("init_order_book creates OrderBook + escrow ATAs", async () => {
+    await program.methods
+      .initOrderBook()
+      .accounts({
+        config: configPda,
+        market: marketPda,
+        orderBook: orderBookPda,
+        bookAuthority: bookAuthPda,
+        usdcEscrow,
+        yesEscrow,
+        usdcMint,
+        yesMint: yesMintPda,
+        admin: admin.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .rpc();
+
+    const book = await program.account.orderBook.fetch(orderBookPda);
+    expect(book.market.toBase58()).toBe(marketPda.toBase58());
+    expect(book.bidsLen).toBe(0);
+    expect(book.asksLen).toBe(0);
+    expect(Number(book.nextSequence)).toBe(0);
+  });
+
+  it("place_order Bid escrows USDC and inserts into bids", async () => {
+    const before = (await getAccount(provider.connection, userUsdc)).amount;
+    // Buy 5 Yes at $0.55 = 5 * 55 * 10_000 = 2_750_000 base.
+    await program.methods
+      .placeOrder({ bid: {} }, 55, new BN(5))
+      .accounts({
+        config: configPda,
+        market: marketPda,
+        orderBook: orderBookPda,
+        usdcEscrow,
+        yesEscrow,
+        userUsdc,
+        userYes,
+        yesMint: yesMintPda,
+        user: user.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([user])
+      .rpc();
+
+    const after = (await getAccount(provider.connection, userUsdc)).amount;
+    expect(Number(before - after)).toBe(2_750_000);
+    const escrow = await getAccount(provider.connection, usdcEscrow);
+    expect(Number(escrow.amount)).toBe(2_750_000);
+
+    const book = await program.account.orderBook.fetch(orderBookPda);
+    expect(book.bidsLen).toBe(1);
+    expect(book.bids[0].priceTicks).toBe(55);
+    expect(Number(book.bids[0].qty)).toBe(5);
+  });
+
+  it("cancel_order refunds USDC", async () => {
+    const before = (await getAccount(provider.connection, userUsdc)).amount;
+    const book0 = await program.account.orderBook.fetch(orderBookPda);
+    const sequence = book0.bids[0].sequence;
+
+    await program.methods
+      .cancelOrder({ bid: {} }, sequence)
+      .accounts({
+        config: configPda,
+        market: marketPda,
+        orderBook: orderBookPda,
+        bookAuthority: bookAuthPda,
+        usdcEscrow,
+        yesEscrow,
+        userUsdc,
+        userYes,
+        user: user.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([user])
+      .rpc();
+
+    const after = (await getAccount(provider.connection, userUsdc)).amount;
+    expect(Number(after - before)).toBe(2_750_000);
+    const book = await program.account.orderBook.fetch(orderBookPda);
+    expect(book.bidsLen).toBe(0);
+  });
+});
