@@ -1,0 +1,25 @@
+# Node
+node_modules/
+.next/
+dist/
+*.log
+
+# Anchor / Solana
+target/
+.anchor/
+test-ledger/
+
+# Env (per constitution §2.8: never commit .env*)
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Keypairs
+*.json.key
+keypairs/
