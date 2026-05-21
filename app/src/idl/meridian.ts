@@ -51,6 +51,116 @@ export type Meridian = {
       ]
     },
     {
+      "name": "buyNo",
+      "docs": [
+        "Atomic mint-pair + IOC-sell-Yes against the best bid.",
+        "User signs once, ends up with `qty` No tokens, paying",
+        "`qty * (1.00 - bid_price)` USDC net. Reverts if best bid is",
+        "missing or below `min_bid_price_ticks` (slippage protection)."
+      ],
+      "discriminator": [
+        89,
+        240,
+        244,
+        16,
+        196,
+        201,
+        190,
+        163
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "vaultAuthority"
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "orderBook",
+          "writable": true
+        },
+        {
+          "name": "bookAuthority"
+        },
+        {
+          "name": "usdcEscrow",
+          "writable": true
+        },
+        {
+          "name": "bidMakerYes",
+          "docs": [
+            "Yes ATA of the bid maker (receives Yes tokens)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userUsdc",
+          "docs": [
+            "User's USDC source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userYes",
+          "docs": [
+            "User's Yes ATA — used as a transient sink for the minted Yes."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userNo",
+          "docs": [
+            "User's No ATA — destination for the No half of the pair."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "qty",
+          "type": "u64"
+        },
+        {
+          "name": "minBidPriceTicks",
+          "type": "u32"
+        }
+      ]
+    },
+    {
       "name": "cancelOrder",
       "docs": [
         "Owner cancels an unfilled order, gets remaining escrow back."
@@ -587,6 +697,72 @@ export type Meridian = {
       "args": []
     },
     {
+      "name": "matchOrders",
+      "docs": [
+        "Crosses the best bid against the best ask. Anyone can call.",
+        "No-op when the book is one-sided or the spreads don't cross."
+      ],
+      "discriminator": [
+        17,
+        1,
+        201,
+        93,
+        7,
+        51,
+        251,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "orderBook",
+          "writable": true
+        },
+        {
+          "name": "bookAuthority"
+        },
+        {
+          "name": "usdcEscrow",
+          "writable": true
+        },
+        {
+          "name": "yesEscrow",
+          "writable": true
+        },
+        {
+          "name": "askMakerUsdc",
+          "docs": [
+            "USDC ATA of the resting-ask owner (seller). Receives USDC on fill."
+          ],
+          "writable": true
+        },
+        {
+          "name": "bidMakerYes",
+          "docs": [
+            "Yes ATA of the resting-bid owner (buyer). Receives Yes tokens on fill."
+          ],
+          "writable": true
+        },
+        {
+          "name": "cranker",
+          "docs": [
+            "Cranker pays the tx fee. Can be anyone."
+          ],
+          "signer": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "mintPair",
       "docs": [
         "Anyone deposits N USDC and receives N Yes + N No tokens."
@@ -874,6 +1050,156 @@ export type Meridian = {
       ]
     },
     {
+      "name": "sellNo",
+      "docs": [
+        "Atomic IOC-buy-Yes + redeem-pair against the best ask.",
+        "User signs once, receives `qty * (1.00 - ask_price)` USDC.",
+        "Reverts if best ask is missing or above `max_ask_price_ticks`."
+      ],
+      "discriminator": [
+        189,
+        194,
+        132,
+        42,
+        80,
+        249,
+        154,
+        103
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "vaultAuthority"
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "orderBook",
+          "writable": true
+        },
+        {
+          "name": "bookAuthority"
+        },
+        {
+          "name": "yesEscrow",
+          "writable": true
+        },
+        {
+          "name": "askMakerUsdc",
+          "docs": [
+            "USDC ATA of the ask maker (receives USDC)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userUsdc",
+          "docs": [
+            "User's USDC ATA: pays ask, then receives the pair-redemption USDC."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userYes",
+          "docs": [
+            "User's Yes ATA: transient sink for the bought Yes (burned next)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userNo",
+          "docs": [
+            "User's No ATA: source for the burn."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "qty",
+          "type": "u64"
+        },
+        {
+          "name": "maxAskPriceTicks",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "settleMarket",
+      "docs": [
+        "Permissionless settle: reads Pyth PriceUpdateV2 on-chain, validates",
+        "staleness + confidence, writes Outcome immutably."
+      ],
+      "discriminator": [
+        193,
+        153,
+        95,
+        216,
+        166,
+        6,
+        144,
+        217
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "priceUpdate",
+          "docs": [
+            "Pyth price update account. Caller (cranker) posts a fresh one before",
+            "calling this instruction."
+          ]
+        },
+        {
+          "name": "cranker",
+          "docs": [
+            "Cranker pays the tx fee."
+          ],
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "settleMarketManual",
       "docs": [
         "Admin-only stub settlement used by tests and dev workflows.",
@@ -975,6 +1301,19 @@ export type Meridian = {
         39,
         65,
         248
+      ]
+    },
+    {
+      "name": "priceUpdateV2",
+      "discriminator": [
+        34,
+        241,
+        35,
+        99,
+        157,
+        126,
+        244,
+        205
       ]
     }
   ],
@@ -1525,6 +1864,114 @@ export type Meridian = {
       }
     },
     {
+      "name": "priceFeedMessage",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "feedId",
+            "docs": [
+              "`FeedId` but avoid the type alias because of compatibility issues with Anchor's `idl-build` feature."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "i64"
+          },
+          {
+            "name": "conf",
+            "type": "u64"
+          },
+          {
+            "name": "exponent",
+            "type": "i32"
+          },
+          {
+            "name": "publishTime",
+            "docs": [
+              "The timestamp of this price update in seconds"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "prevPublishTime",
+            "docs": [
+              "The timestamp of the previous price update. This field is intended to allow users to",
+              "identify the single unique price update for any moment in time:",
+              "for any time t, the unique update is the one such that prev_publish_time < t <= publish_time.",
+              "",
+              "Note that there may not be such an update while we are migrating to the new message-sending logic,",
+              "as some price updates on pythnet may not be sent to other chains (because the message-sending",
+              "logic may not have triggered). We can solve this problem by making the message-sending mandatory",
+              "(which we can do once publishers have migrated over).",
+              "",
+              "Additionally, this field may be equal to publish_time if the message is sent on a slot where",
+              "where the aggregation was unsuccesful. This problem will go away once all publishers have",
+              "migrated over to a recent version of pyth-agent."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "emaPrice",
+            "type": "i64"
+          },
+          {
+            "name": "emaConf",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "priceUpdateV2",
+      "docs": [
+        "A price update account. This account is used by the Pyth Receiver program to store a verified price update from a Pyth price feed.",
+        "It contains:",
+        "- `write_authority`: The write authority for this account. This authority can close this account to reclaim rent or update the account to contain a different price update.",
+        "- `verification_level`: The [`VerificationLevel`] of this price update. This represents how many Wormhole guardian signatures have been verified for this price update.",
+        "- `price_message`: The actual price update.",
+        "- `posted_slot`: The slot at which this price update was posted."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "writeAuthority",
+            "type": "pubkey"
+          },
+          {
+            "name": "verificationLevel",
+            "type": {
+              "defined": {
+                "name": "verificationLevel"
+              }
+            }
+          },
+          {
+            "name": "priceMessage",
+            "type": {
+              "defined": {
+                "name": "priceFeedMessage"
+              }
+            }
+          },
+          {
+            "name": "postedSlot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
       "name": "redeemSide",
       "type": {
         "kind": "enum",
@@ -1534,6 +1981,39 @@ export type Meridian = {
           },
           {
             "name": "no"
+          }
+        ]
+      }
+    },
+    {
+      "name": "verificationLevel",
+      "docs": [
+        "Pyth price updates are bridged to all blockchains via Wormhole.",
+        "Using the price updates on another chain requires verifying the signatures of the Wormhole guardians.",
+        "The usual process is to check the signatures for two thirds of the total number of guardians, but this can be cumbersome on Solana because of the transaction size limits,",
+        "so we also allow for partial verification.",
+        "",
+        "This enum represents how much a price update has been verified:",
+        "- If `Full`, we have verified the signatures for two thirds of the current guardians.",
+        "- If `Partial`, only `num_signatures` guardian signatures have been checked.",
+        "",
+        "# Warning",
+        "Using partially verified price updates is dangerous, as it lowers the threshold of guardians that need to collude to produce a malicious price update."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "partial",
+            "fields": [
+              {
+                "name": "numSignatures",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "full"
           }
         ]
       }

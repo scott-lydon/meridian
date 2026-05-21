@@ -509,6 +509,68 @@ describe("meridian slice 3 — order book", () => {
     expect(threw).toBe(true);
   });
 
+  it("slice 3.5 + 4: full match flow (existing bid + new ask, match_orders crosses them)", async () => {
+    // user already has a bid at $0.55 qty 5 in the book from the earlier
+    // "place_order Bid" test. Add an ask from a second wallet and match.
+    const user2 = Keypair.generate();
+    const sig = await provider.connection.requestAirdrop(user2.publicKey, 2e9);
+    await provider.connection.confirmTransaction(sig, "confirmed");
+    const user2Usdc = await createAssociatedTokenAccount(provider.connection, user2, usdcMint, user2.publicKey);
+    const user2Yes = await createAssociatedTokenAccount(provider.connection, user2, yesMintPda, user2.publicKey);
+    const user2No = await createAssociatedTokenAccount(provider.connection, user2, noMintPda, user2.publicKey);
+    await mintTo(provider.connection, admin, usdcMint, user2Usdc, admin, 20 * USDC_BASE);
+
+    // user2 mint_pair 5 → 5 Yes + 5 No, pays 5 USDC. Balance now 15 USDC.
+    await program.methods.mintPair(new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, vaultAuthority: vaultAuthPda,
+        yesMint: yesMintPda, noMint: noMintPda, vault: vaultAta,
+        userUsdc: user2Usdc, userYes: user2Yes, userNo: user2No,
+        user: user2.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([user2]).rpc();
+
+    // user2 places Ask at $0.55 qty 5 (escrows 5 Yes)
+    await program.methods.placeOrder({ ask: {} }, 55, new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        usdcEscrow, yesEscrow, userUsdc: user2Usdc, userYes: user2Yes, yesMint: yesMintPda,
+        user: user2.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([user2]).rpc();
+
+    const userYesBefore = Number((await getAccount(provider.connection, userYes)).amount);
+    const user2UsdcBefore = Number((await getAccount(provider.connection, user2Usdc)).amount);
+
+    // Cross via match_orders
+    await program.methods.matchOrders()
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        bookAuthority: bookAuthPda, usdcEscrow, yesEscrow,
+        askMakerUsdc: user2Usdc, bidMakerYes: userYes,
+        cranker: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    const userYesAfter = Number((await getAccount(provider.connection, userYes)).amount);
+    const user2UsdcAfter = Number((await getAccount(provider.connection, user2Usdc)).amount);
+    expect(userYesAfter - userYesBefore).toBe(5);             // bid maker got 5 Yes
+    expect(user2UsdcAfter - user2UsdcBefore).toBe(2_750_000); // ask maker got 5 * 0.55 = $2.75
+
+    const book = await program.account.orderBook.fetch(orderBookPda);
+    expect(book.bidsLen).toBe(0);
+    expect(book.asksLen).toBe(0);
+
+    // Re-place a bid so the next test (cancel_order) has something to cancel.
+    await program.methods.placeOrder({ bid: {} }, 55, new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        usdcEscrow, yesEscrow, userUsdc, userYes, yesMint: yesMintPda,
+        user: user.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([user]).rpc();
+  });
+
   it("cancel_order refunds USDC", async () => {
     const before = (await getAccount(provider.connection, userUsdc)).amount;
     const book0 = await program.account.orderBook.fetch(orderBookPda);

@@ -129,4 +129,45 @@ pub mod meridian {
     pub fn unpause(ctx: Context<Pause>) -> Result<()> {
         instructions::pause::unpause_handler(ctx)
     }
+
+    // ===== Slice 3.5: cranker =====
+
+    /// Crosses the best bid against the best ask. Anyone can call.
+    /// No-op when the book is one-sided or the spreads don't cross.
+    pub fn match_orders(ctx: Context<MatchOrders>) -> Result<()> {
+        instructions::match_orders::handler(ctx)
+    }
+
+    // ===== Slice 4: atomic Buy No / Sell No =====
+
+    /// Atomic mint-pair + IOC-sell-Yes against the best bid.
+    /// User signs once, ends up with `qty` No tokens, paying
+    /// `qty * (1.00 - bid_price)` USDC net. Reverts if best bid is
+    /// missing or below `min_bid_price_ticks` (slippage protection).
+    pub fn buy_no(
+        ctx: Context<BuyNo>,
+        qty: u64,
+        min_bid_price_ticks: u32,
+    ) -> Result<()> {
+        instructions::buy_no::handler(ctx, qty, min_bid_price_ticks)
+    }
+
+    /// Atomic IOC-buy-Yes + redeem-pair against the best ask.
+    /// User signs once, receives `qty * (1.00 - ask_price)` USDC.
+    /// Reverts if best ask is missing or above `max_ask_price_ticks`.
+    pub fn sell_no(
+        ctx: Context<SellNo>,
+        qty: u64,
+        max_ask_price_ticks: u32,
+    ) -> Result<()> {
+        instructions::sell_no::handler(ctx, qty, max_ask_price_ticks)
+    }
+
+    // ===== Slice 2: Pyth on-chain settlement =====
+
+    /// Permissionless settle: reads Pyth PriceUpdateV2 on-chain, validates
+    /// staleness + confidence, writes Outcome immutably.
+    pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
+        instructions::settle_market::handler(ctx)
+    }
 }
