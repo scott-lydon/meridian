@@ -232,8 +232,7 @@ These are intentionally excluded. Each line carries the reason so future argumen
 - **Token gating, governance, or DAO.** v1 has a single admin keypair. DAO ownership is out.
 - **Liquidity mining or rewards.** Out.
 - **Cross-chain bridges.** USDC is whatever USDC is on the chosen chain. No bridging.
-
-## Rubric-pillar mapping
+- **Per-fill cost basis tracking (avg entry price + unrealized P&L on active positions).** US-13's avg-entry-price and unrealized-P&L columns would require an off-chain indexer (Helius webhook on `place_order` / `buy_no` / `sell_no` fills) to attribute fill prices back to the user. v1 ships net redeemable USDC for settled markets (which IS realized P&L) and current-mark (best bid) for active markets so users see the mark-to-market without per-fill attribution. Indexer ships in v2.
 
 The defense and the AI interview will be evaluated against four pillars. Every user story above is tagged to the pillar(s) it serves. This table is the line of evidence we cite back to in `docs/AI_INTERVIEW_PREP.md`.
 

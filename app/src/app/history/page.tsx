@@ -1,10 +1,12 @@
 "use client";
 
-// US-14: connected user's own Meridian-program transactions, freshest first,
-// with one click to Solana Explorer for the full audit trail.
+// US-14: connected user's own Meridian-program transactions for the last 30
+// days, with the human action label, the resulting USDC balance change, and
+// one click to Solana Explorer for the full audit trail.
 
 import { useWallet } from "@solana/wallet-adapter-react";
 import { useUserHistory, type UserTx } from "@/hooks/useUserHistory";
+import { formatUsdc, usdcFromBase } from "@/lib/usdc";
 
 export const dynamic = "force-dynamic";
 
@@ -17,16 +19,31 @@ function fmtTime(unix: number | null) {
   return new Date(unix * 1000).toLocaleString();
 }
 
-function methodColor(method: string) {
-  if (method.startsWith("redeem")) return "text-yes";
-  if (method.startsWith("place_order") || method.startsWith("buy_") || method.startsWith("sell_")) return "text-accent";
-  if (method.startsWith("settle_") || method.startsWith("admin_") || method.startsWith("pause")) return "text-accentHover";
+function labelColor(label: string) {
+  if (label.startsWith("Redeem")) return "text-yes";
+  if (label.startsWith("Buy ")) return "text-accent";
+  if (label.startsWith("Sell ")) return "text-no";
+  if (label.startsWith("Mint pair")) return "text-accent";
+  if (label.startsWith("Cancel")) return "text-muted";
+  if (label.startsWith("Settle") || label.startsWith("Pause") || label.startsWith("Unpause") || label.includes("admin")) {
+    return "text-accentHover";
+  }
   return "text-muted";
+}
+
+function fmtDelta(deltaMicros: bigint | undefined): { text: string; cls: string } {
+  if (deltaMicros === undefined || deltaMicros === 0n) return { text: "—", cls: "text-muted" };
+  const sign = deltaMicros > 0n ? "+" : "-";
+  const abs = deltaMicros > 0n ? deltaMicros : -deltaMicros;
+  return {
+    text: `${sign}${formatUsdc(usdcFromBase(abs))}`,
+    cls: deltaMicros > 0n ? "text-yes" : "text-no",
+  };
 }
 
 export default function HistoryPage() {
   const { publicKey } = useWallet();
-  const history = useUserHistory(50);
+  const history = useUserHistory(50, 30);
 
   if (!publicKey) {
     return (
@@ -38,11 +55,11 @@ export default function HistoryPage() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-6 py-10">
+    <main className="mx-auto max-w-6xl px-6 py-10">
       <h1 className="mb-2 text-3xl font-bold">History</h1>
       <p className="mb-8 text-muted">
         Your Meridian program transactions for{" "}
-        <span className="font-mono">{publicKey.toBase58().slice(0, 8)}…</span>. Refreshes every 8s.
+        <span className="font-mono">{publicKey.toBase58().slice(0, 8)}…</span> over the last 30 days. Refreshes every 8s.
       </p>
 
       <div className="rounded-2xl border border-panel bg-panel/40 p-5">
@@ -62,39 +79,44 @@ export default function HistoryPage() {
             <thead className="text-left text-xs uppercase tracking-wider text-muted">
               <tr>
                 <th className="pb-2">When</th>
-                <th className="pb-2">Method</th>
+                <th className="pb-2">Action</th>
+                <th className="pb-2 text-right">USDC change</th>
                 <th className="pb-2">Status</th>
-                <th className="pb-2">Slot</th>
                 <th className="pb-2">Signature</th>
               </tr>
             </thead>
             <tbody className="font-mono">
-              {history.data!.map((t: UserTx) => (
-                <tr key={t.signature} className="border-t border-panel/50 align-top">
-                  <td className="py-2 text-xs text-muted">{fmtTime(t.blockTime)}</td>
-                  <td className={`py-2 ${methodColor(t.method)}`}>{t.method}</td>
-                  <td className="py-2">
-                    {t.success ? (
-                      <span className="text-yes">ok</span>
-                    ) : (
-                      <span className="text-no" title={t.errLog ?? "tx error"}>
-                        failed
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2 text-xs text-muted">{t.slot}</td>
-                  <td className="py-2">
-                    <a
-                      className="text-accent"
-                      href={explorerTx(t.signature)}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {t.signature.slice(0, 10)}…{t.signature.slice(-6)}
-                    </a>
-                  </td>
-                </tr>
-              ))}
+              {history.data!.map((t: UserTx) => {
+                const d = fmtDelta(t.usdcDeltaMicros);
+                return (
+                  <tr key={t.signature} className="border-t border-panel/50 align-top">
+                    <td className="py-2 text-xs text-muted">{fmtTime(t.blockTime)}</td>
+                    <td className={`py-2 ${labelColor(t.label)}`} title={`method=${t.method} | slot=${t.slot}`}>
+                      {t.label}
+                    </td>
+                    <td className={`py-2 text-right ${d.cls}`}>{d.text}</td>
+                    <td className="py-2">
+                      {t.success ? (
+                        <span className="text-yes">ok</span>
+                      ) : (
+                        <span className="text-no" title={t.errLog ?? "tx error"}>
+                          failed
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2">
+                      <a
+                        className="text-accent"
+                        href={explorerTx(t.signature)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {t.signature.slice(0, 10)}…{t.signature.slice(-6)}
+                      </a>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
