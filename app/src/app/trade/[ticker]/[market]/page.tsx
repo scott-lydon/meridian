@@ -20,7 +20,16 @@ function useCountdown(toUnix: number | undefined): string {
   }, []);
   if (!toUnix) return "—";
   const diff = toUnix - now;
-  if (diff <= 0) return "settled";
+  if (diff <= 0) {
+    // Expiry has passed but the market is still tagged Pending. This means
+    // settlement has not yet run (automation cron + Pyth oracle read) OR
+    // admin_settle has not fired. Be explicit so users don't try to trade
+    // an expired market expecting it to be live.
+    const elapsed = -diff;
+    const eh = Math.floor(elapsed / 3600);
+    const em = Math.floor((elapsed % 3600) / 60);
+    return eh > 0 ? `Expired ${eh}h ${em}m ago — awaiting settle` : `Expired ${em}m ago — awaiting settle`;
+  }
   const h = Math.floor(diff / 3600);
   const m = Math.floor((diff % 3600) / 60);
   const s = diff % 60;
@@ -103,6 +112,11 @@ export default function TradePage({
   const holdsYes = userYesBal > 0n;
   const holdsNo = userNoBal > 0n;
   const countdown = useCountdown(m?.expiryUnix);
+  // Trading is closed once expiry passes (even if outcome is still Pending,
+  // because the program rejects place_order / buy_no / sell_no / mint_pair
+  // past expiry). Compute this once and gate all trade buttons on it so the
+  // UI matches on-chain behavior.
+  const isExpired = !!m?.expiryUnix && m.expiryUnix * 1000 <= Date.now();
 
   function explorerTx(sig: string) {
     return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
@@ -268,17 +282,24 @@ export default function TradePage({
             className="mb-3 w-full rounded-lg border border-panel bg-bg/40 px-3 py-2 font-mono text-sm"
           />
 
+          {isExpired && (
+            <div className="mb-3 rounded-lg border border-no/40 bg-no/10 p-3 text-xs text-no">
+              <strong>Trading closed.</strong> This market expired and is awaiting settlement.
+              You cannot place new orders or mint pairs. Once the automation crons run or admin_settle is
+              called, the outcome will be set and you&apos;ll be able to <a className="underline" href="/portfolio">redeem any winning tokens</a>.
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <button
-              disabled={!trade.ready || busy !== null || holdsNo}
+              disabled={!trade.ready || busy !== null || holdsNo || isExpired}
               onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty))}
               className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:opacity-40"
-              title={holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
+              title={isExpired ? "Market expired" : holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
             >
               {busy === "Buy Yes" ? "..." : "Buy Yes"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null || !bestBid || holdsYes}
+              disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired}
               onClick={() =>
                 run("Buy No", () =>
                   trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
@@ -286,25 +307,27 @@ export default function TradePage({
               }
               className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:opacity-40"
               title={
-                holdsYes
-                  ? "Sell your Yes position before buying No (PRD position constraint)"
-                  : bestBid
-                    ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
-                    : "No bid available"
+                isExpired
+                  ? "Market expired"
+                  : holdsYes
+                    ? "Sell your Yes position before buying No (PRD position constraint)"
+                    : bestBid
+                      ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
+                      : "No bid available"
               }
             >
               {busy === "Buy No" ? "..." : "Buy No"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null || !holdsYes}
+              disabled={!trade.ready || busy !== null || !holdsYes || isExpired}
               onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty))}
               className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
-              title={!holdsYes ? "Need Yes tokens to sell" : ""}
+              title={isExpired ? "Market expired" : !holdsYes ? "Need Yes tokens to sell" : ""}
             >
               {busy === "Sell Yes" ? "..." : "Sell Yes"}
             </button>
             <button
-              disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo}
+              disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired}
               onClick={() =>
                 run("Sell No", () =>
                   trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
@@ -312,11 +335,13 @@ export default function TradePage({
               }
               className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
               title={
-                !holdsNo
-                  ? "Need No tokens to sell"
-                  : bestAsk
-                    ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
-                    : "No ask available"
+                isExpired
+                  ? "Market expired"
+                  : !holdsNo
+                    ? "Need No tokens to sell"
+                    : bestAsk
+                      ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
+                      : "No ask available"
               }
             >
               {busy === "Sell No" ? "..." : "Sell No"}
@@ -324,7 +349,7 @@ export default function TradePage({
           </div>
 
           <button
-            disabled={!trade.ready || busy !== null}
+            disabled={!trade.ready || busy !== null || isExpired}
             onClick={() => run("Mint Pair", () => trade.mintPair(qty))}
             className="mt-3 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:opacity-40"
           >
