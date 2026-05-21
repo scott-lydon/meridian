@@ -1,0 +1,23 @@
+[features]
+seeds = false
+skip-lint = false
+resolution = true
+
+[programs.localnet]
+meridian = "499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s"
+
+[programs.devnet]
+meridian = "499QonPencmcxszHqjKKsMUE6dnbWh1AJ4f9LTrv9t1s"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[workspace]
+members = ["programs/meridian"]
+
+[scripts]
+test = "pnpm exec tsx --import tsx tests/scaffold.test.ts"

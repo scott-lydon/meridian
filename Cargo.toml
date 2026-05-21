@@ -1,0 +1,27 @@
+[workspace]
+members = ["programs/*"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Scott Lydon <relays.inanity.0n@icloud.com>"]
+repository = "https://github.com/scott-lydon/meridian"
+
+[workspace.dependencies]
+anchor-lang = "0.30.1"
+anchor-spl = "0.30.1"
+pyth-solana-receiver-sdk = "0.3.0"
+solana-program = "1.18"
+proptest = "1.4"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

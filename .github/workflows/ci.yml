@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  ANCHOR_VERSION: 0.30.1
+  SOLANA_VERSION: stable
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  anchor:
+    name: Anchor (build + clippy + fmt + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor via AVM
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --force
+          avm install ${{ env.ANCHOR_VERSION }}
+          avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: anchor build
+        run: anchor build
+
+      - name: Generate test keypair
+        run: solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
+
+      - name: anchor test
+        run: anchor test --skip-local-validator --skip-build || anchor test
+
+  ts:
+    name: TypeScript (lint + typecheck + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: lint
+        run: pnpm -r --if-present lint
+
+      - name: typecheck
+        run: pnpm -r --if-present typecheck
+
+      - name: test
+        run: pnpm -r --if-present test
+
+  conventional-commits:
+    name: Conventional commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: webiny/action-conventional-commits@v1.3.0

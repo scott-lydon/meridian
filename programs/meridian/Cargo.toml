@@ -1,0 +1,33 @@
+[package]
+name = "meridian"
+version = "0.1.0"
+description = "Binary stock outcome markets on Solana — Anchor program"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "meridian"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true, features = ["token", "associated_token"] }
+pyth-solana-receiver-sdk = { workspace = true }

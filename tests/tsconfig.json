@@ -1,0 +1,14 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@meridian/program": ["../target/types/meridian"]
+    }
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules"]
+}

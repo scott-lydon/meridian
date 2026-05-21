@@ -1,0 +1,48 @@
+# Pre-commit hooks (prek-compatible).
+# Install: `prek install` (from repo root).
+# Run all: `prek run --all-files`.
+
+repos:
+  - repo: local
+    hooks:
+      - id: env-no-secrets
+        name: forbid .env* files except .env.example and .env.test
+        entry: bash -c 'for f in "$@"; do case "$f" in .env|.env.local|.env.*.local|.env.development|.env.production) echo "BLOCKED: $f looks like a secrets file"; exit 1;; esac; done'
+        language: system
+        types_or: [file]
+        pass_filenames: true
+
+      - id: keypair-no-commit
+        name: forbid keypair files
+        entry: bash -c 'for f in "$@"; do if [[ "$f" == *.json && -f "$f" ]] && head -c 1 "$f" | grep -q "\["; then if grep -qE "^\[[0-9, ]{200,}\]$" "$f" 2>/dev/null; then echo "BLOCKED: $f looks like a Solana keypair"; exit 1; fi; fi; done'
+        language: system
+        types: [json]
+        pass_filenames: true
+
+      - id: cargo-fmt
+        name: cargo fmt
+        entry: cargo fmt --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: cargo clippy (-D warnings)
+        entry: cargo clippy --all-targets -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: pnpm-lint
+        name: pnpm lint
+        entry: pnpm -r lint
+        language: system
+        files: \.(ts|tsx|js|jsx)$
+        pass_filenames: false
+
+      - id: pnpm-typecheck
+        name: pnpm typecheck
+        entry: pnpm -r typecheck
+        language: system
+        files: \.(ts|tsx)$
+        pass_filenames: false
