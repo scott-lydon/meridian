@@ -78,11 +78,11 @@ export default function HistoryPage() {
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wider text-muted">
               <tr>
-                <th className="pb-2">When</th>
-                <th className="pb-2">Action</th>
-                <th className="pb-2 text-right">USDC change</th>
-                <th className="pb-2">Status</th>
-                <th className="pb-2">Signature</th>
+                <th className="px-3 pb-2">When</th>
+                <th className="px-3 pb-2">Action</th>
+                <th className="px-3 pb-2 text-right">USDC change</th>
+                <th className="px-3 pb-2 text-center">Status</th>
+                <th className="px-3 pb-2">Signature</th>
               </tr>
             </thead>
             <tbody className="font-mono">
@@ -90,21 +90,26 @@ export default function HistoryPage() {
                 const d = fmtDelta(t.usdcDeltaMicros);
                 return (
                   <tr key={t.signature} className="border-t border-panel/50 align-top">
-                    <td className="py-2 text-xs text-muted">{fmtTime(t.blockTime)}</td>
-                    <td className={`py-2 ${labelColor(t.label)}`} title={`method=${t.method} | slot=${t.slot}`}>
+                    <td className="px-3 py-2 text-xs text-muted">{fmtTime(t.blockTime)}</td>
+                    <td className={`px-3 py-2 ${labelColor(t.label)}`} title={`method=${t.method} | slot=${t.slot}`}>
                       {t.label}
                     </td>
-                    <td className={`py-2 text-right ${d.cls}`}>{d.text}</td>
-                    <td className="py-2">
+                    <td className={`px-3 py-2 text-right tabular-nums ${d.cls}`}>{d.text}</td>
+                    <td className="px-3 py-2 text-center">
                       {t.success ? (
-                        <span className="text-yes">ok</span>
+                        <span className="inline-block rounded-full border border-yes/40 bg-yes/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider text-yes">
+                          ok
+                        </span>
                       ) : (
-                        <span className="text-no" title={t.errLog ?? "tx error"}>
+                        <span
+                          className="inline-block rounded-full border border-no/40 bg-no/10 px-2 py-0.5 text-[10px] font-sans uppercase tracking-wider text-no"
+                          title={t.errLog ?? "tx error"}
+                        >
                           failed
                         </span>
                       )}
                     </td>
-                    <td className="py-2">
+                    <td className="px-3 py-2">
                       <a
                         className="text-accent"
                         href={explorerTx(t.signature)}
