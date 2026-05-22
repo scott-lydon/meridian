@@ -2,6 +2,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 
+import { MAG7_TICKERS, pyth } from "@/lib/pyth";
+
 export interface PythLivePrice {
   ticker: string;
   feedId: string;
@@ -11,27 +13,28 @@ export interface PythLivePrice {
   ageSecs: number;
 }
 
-const FEEDS: Record<string, string> = {
-  AAPL: "5a207c4aa0114baecf852fcd9db9beb8ec715f2db48caa525dbd878fd416fb09",
-  MSFT: "8f98f8267ddddeeb61b4fd11f21dc0c2842c417622b4d685243fa73b5830131f",
-  GOOGL: "88d0800b1649d98e21b8bf9c3f42ab548034d62874ad5d80e1c1b730566d7f61",
-  AMZN: "82c59e36a8e0247e15283748d6cd51f5fa1019d73fbf3ab6d927e17d9e357a7f",
-  NVDA: "61c4ca5b9731a79e285a01e24432d57d89f0ecdd4cd7828196ca8992d5eafef6",
-  META: "399f1e8f1c4a517859963b56f104727a7a3c7f0f8fee56d34fa1f72e5a4b78ef",
-  TSLA: "42676a595d0099c381687124805c8bb22c75424dffcaa55e3dc6549854ebe20a",
-};
-
+/**
+ * Live MAG7 prices from Pyth Hermes. Refreshes every 5 seconds.
+ *
+ * Feed IDs and the Hermes URL come from `@/lib/pyth`, which reads them from
+ * `NEXT_PUBLIC_PYTH_*` env at boot. Constitution section 5 forbids hardcoding
+ * either of them here; if you find yourself wanting to inline a feed ID for
+ * a quick fix, update `.env.example` and `@/lib/pyth` instead so the
+ * automation service mirror stays in sync.
+ */
 export function usePythLive() {
   return useQuery<PythLivePrice[]>({
-    queryKey: ["pyth-live-mag7"],
+    queryKey: ["pyth-live-mag7", pyth.hermesUrl],
     queryFn: async () => {
-      const ids = Object.values(FEEDS)
-        .map((id) => `ids[]=${id}`)
-        .join("&");
-      const url = `https://hermes.pyth.network/v2/updates/price/latest?${ids}`;
+      const ids = MAG7_TICKERS.map((t) => `ids[]=${pyth.feeds[t]}`).join("&");
+      const url = `${pyth.hermesUrl}/v2/updates/price/latest?${ids}`;
       const res = await fetch(url);
       if (!res.ok) {
-        throw new Error(`Hermes returned HTTP ${res.status}`);
+        throw new Error(
+          `Pyth Hermes returned HTTP ${res.status} for ${url}. ` +
+            `Check NEXT_PUBLIC_PYTH_HERMES_URL is reachable from the browser and that ` +
+            `the feed IDs in NEXT_PUBLIC_PYTH_FEED_* are current (Hermes verified periodically).`,
+        );
       }
       const json = (await res.json()) as {
         parsed: {
@@ -41,12 +44,15 @@ export function usePythLive() {
       };
       const now = Math.floor(Date.now() / 1000);
       const out: PythLivePrice[] = [];
-      for (const ticker of Object.keys(FEEDS)) {
-        const feedId = FEEDS[ticker]!;
+      for (const ticker of MAG7_TICKERS) {
+        const feedId = pyth.feeds[ticker];
         const entry = json.parsed.find((p) => p.id === feedId);
         if (!entry) continue;
         const rawPrice = BigInt(entry.price.price);
         const rawConf = BigInt(entry.price.conf);
+        // Pyth integer prices are well under 2^53 for equity feeds (price * 10^expo
+        // with expo around -8 means the integer is in the low billions for $100-$1000
+        // stocks). Safe to Number-coerce at the render boundary.
         const price = Number(rawPrice) * 10 ** entry.price.expo;
         const confBps = Math.round((Number(rawConf) * 10_000) / Number(rawPrice));
         out.push({

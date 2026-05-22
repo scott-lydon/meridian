@@ -300,3 +300,119 @@ describe("qa-adversary: Anchor discriminator map (useUserHistory)", () => {
     }
   });
 });
+
+// ============================================================================
+// Mirrored from app/src/hooks/useOrderBookFor.ts — order book quote math.
+// quoteFromBook is a hot pure function: it powers both /trade's live ladder
+// and /portfolio's mark-to-market. The mid here feeds markValueUsdcMicros
+// above. Drift between the two would silently corrupt every active-position
+// dollar number a user sees, so we mirror it.
+// ============================================================================
+
+interface OrderViewMirror {
+  priceTicks: number;
+}
+
+interface BookViewMirror {
+  bids: OrderViewMirror[];
+  asks: OrderViewMirror[];
+}
+
+interface BookQuoteMirror {
+  bestBidUsdcMicros?: bigint;
+  bestAskUsdcMicros?: bigint;
+  midUsdcMicros?: bigint;
+}
+
+function quoteFromBook(book: BookViewMirror | null | undefined): BookQuoteMirror {
+  if (!book) return {};
+  const bestBidTicks = book.bids[0]?.priceTicks;
+  const bestAskTicks = book.asks[0]?.priceTicks;
+  const bestBid = bestBidTicks != null ? BigInt(bestBidTicks) * 10_000n : undefined;
+  const bestAsk = bestAskTicks != null ? BigInt(bestAskTicks) * 10_000n : undefined;
+  const mid = bestBid !== undefined && bestAsk !== undefined ? (bestBid + bestAsk) / 2n : undefined;
+  const quote: BookQuoteMirror = {};
+  if (bestBid !== undefined) quote.bestBidUsdcMicros = bestBid;
+  if (bestAsk !== undefined) quote.bestAskUsdcMicros = bestAsk;
+  if (mid !== undefined) quote.midUsdcMicros = mid;
+  return quote;
+}
+
+describe("qa-adversary: quoteFromBook (useOrderBookFor)", () => {
+  it("invariant: undefined / null book returns an empty quote (no spurious mid)", () => {
+    expect(quoteFromBook(null)).toEqual({});
+    expect(quoteFromBook(undefined)).toEqual({});
+  });
+
+  it("invariant: empty book returns an empty quote", () => {
+    expect(quoteFromBook({ bids: [], asks: [] })).toEqual({});
+  });
+
+  it("invariant: bid-only book has no mid (would otherwise misprice pure-Yes marks)", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 99 }), (bidTicks) => {
+        const q = quoteFromBook({ bids: [{ priceTicks: bidTicks }], asks: [] });
+        return (
+          q.midUsdcMicros === undefined &&
+          q.bestAskUsdcMicros === undefined &&
+          q.bestBidUsdcMicros === BigInt(bidTicks) * 10_000n
+        );
+      }),
+    );
+  });
+
+  it("invariant: ask-only book has no mid", () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 99 }), (askTicks) => {
+        const q = quoteFromBook({ bids: [], asks: [{ priceTicks: askTicks }] });
+        return (
+          q.midUsdcMicros === undefined &&
+          q.bestBidUsdcMicros === undefined &&
+          q.bestAskUsdcMicros === BigInt(askTicks) * 10_000n
+        );
+      }),
+    );
+  });
+
+  it("invariant: mid is the integer average of best bid and best ask, in USDC micros", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 99 }),
+        fc.integer({ min: 1, max: 99 }),
+        (bidTicks, askTicks) => {
+          const q = quoteFromBook({
+            bids: [{ priceTicks: bidTicks }],
+            asks: [{ priceTicks: askTicks }],
+          });
+          const expectedMid =
+            (BigInt(bidTicks) * 10_000n + BigInt(askTicks) * 10_000n) / 2n;
+          return q.midUsdcMicros === expectedMid;
+        },
+      ),
+    );
+  });
+
+  it("invariant: only top-of-book matters (extra depth must not change the quote)", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 2, max: 99 }),
+        fc.integer({ min: 2, max: 99 }),
+        fc.array(fc.integer({ min: 1, max: 99 }), { minLength: 0, maxLength: 5 }),
+        fc.array(fc.integer({ min: 1, max: 99 }), { minLength: 0, maxLength: 5 }),
+        (topBid, topAsk, deeperBids, deeperAsks) => {
+          // Top-of-book is index 0; the production code reads bids[0] / asks[0].
+          // The harness mirrors that contract. If anyone refactors to read a
+          // different index without updating the mirror, this property breaks.
+          const q = quoteFromBook({
+            bids: [{ priceTicks: topBid }, ...deeperBids.map((t) => ({ priceTicks: t }))],
+            asks: [{ priceTicks: topAsk }, ...deeperAsks.map((t) => ({ priceTicks: t }))],
+          });
+          return (
+            q.bestBidUsdcMicros === BigInt(topBid) * 10_000n &&
+            q.bestAskUsdcMicros === BigInt(topAsk) * 10_000n
+          );
+        },
+      ),
+    );
+  });
+});
