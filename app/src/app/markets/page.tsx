@@ -33,15 +33,29 @@ export default function MarketsPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {MAG7.map((ticker) => {
           const tickerMarkets = (data ?? []).filter((m) => m.ticker === ticker);
+          // Distinguish "still loading the initial on-chain fetch" from
+          // "loaded successfully and this ticker truly has zero markets
+          // today". Before this fix, both states rendered the same "No
+          // markets yet today." copy per card, which the Vouch depth-2 run
+          // on 2026-05-22 correctly flagged: a screenshot snapped during
+          // the 2-5s initial-RPC window read seven misleading empty cards
+          // even though devnet had 45 markets. Per-card skeleton during
+          // isLoading also preserves the page layout so the user does not
+          // see a layout shift the moment data lands.
+          const isInitialFetch = isLoading || data === undefined;
           return (
             <div key={ticker} className="rounded-2xl border border-panel bg-panel/40 p-5">
               <div className="mb-3 flex items-baseline justify-between">
                 <h2 className="text-xl font-semibold">{ticker}</h2>
                 <span className="text-xs uppercase tracking-wider text-muted">
-                  {tickerMarkets.length} strike{tickerMarkets.length === 1 ? "" : "s"}
+                  {isInitialFetch
+                    ? "loading"
+                    : `${tickerMarkets.length} strike${tickerMarkets.length === 1 ? "" : "s"}`}
                 </span>
               </div>
-              {tickerMarkets.length === 0 ? (
+              {isInitialFetch ? (
+                <p className="text-sm text-muted">Loading on-chain strikes...</p>
+              ) : tickerMarkets.length === 0 ? (
                 <p className="text-sm text-muted">No markets yet today.</p>
               ) : (
                 <ul className="space-y-2">
