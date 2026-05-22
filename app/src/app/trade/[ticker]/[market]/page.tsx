@@ -11,6 +11,7 @@ import { useTrade } from "@/hooks/useTrade";
 import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
+import { marketUiState } from "@/lib/marketSession";
 
 function useCountdown(toUnix: number | undefined): string {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -127,11 +128,17 @@ export default function TradePage({
   const holdsYes = userYesBal > 0n;
   const holdsNo = userNoBal > 0n;
   const countdown = useCountdown(m?.expiryUnix);
-  // Trading is closed once expiry passes (even if outcome is still Pending,
-  // because the program rejects place_order / buy_no / sell_no / mint_pair
-  // past expiry). Compute this once and gate all trade buttons on it so the
-  // UI matches on-chain behavior.
+  // Trading is closed once expiry passes. WTF heads-up: this is a UX-only
+  // gate today. The on-chain `place_order`, `buy_no`, `sell_no`, and
+  // `mint_pair` instructions do NOT currently check `market.expiry_unix`,
+  // so a wallet that bypassed the UI could still submit those transactions
+  // past expiry. Treat this gate as "what the product wants users to do",
+  // not "what the program enforces". Follow-up task tracked in the project
+  // tasks.md to add the on-chain check; until then, do not delete this
+  // client-side gate. Also drives the settled-aware banner copy below.
   const isExpired = !!m?.expiryUnix && m.expiryUnix * 1000 <= Date.now();
+  const uiState = m ? marketUiState(m) : null;
+  const isSettled = uiState === "won-yes" || uiState === "won-no";
 
   function explorerTx(sig: string) {
     return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
@@ -165,10 +172,16 @@ export default function TradePage({
       <header className="mb-8 flex items-baseline justify-between">
         <div>
           <h1 className="text-3xl font-bold">{ticker}</h1>
-          {m && (
+          {m && uiState && (
             <p className="text-muted">
               Strike <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> ·{" "}
-              {m.outcome === "Pending" ? "live" : m.outcome}
+              {uiState === "open"
+                ? "live"
+                : uiState === "awaiting-settle"
+                  ? "awaiting settlement"
+                  : uiState === "won-yes"
+                    ? "settled — Yes won"
+                    : "settled — No won"}
             </p>
           )}
         </div>
@@ -368,11 +381,34 @@ export default function TradePage({
             className="mb-3 w-full rounded-lg border border-panel bg-bg/40 px-3 py-2 font-mono text-sm"
           />
 
-          {isExpired && (
-            <div className="mb-3 rounded-lg border border-no/40 bg-no/10 p-3 text-xs text-no">
-              <strong>Trading closed.</strong> This market expired and is awaiting settlement.
-              You cannot place new orders or mint pairs. Once the automation crons run or admin_settle is
-              called, the outcome will be set and you&apos;ll be able to <a className="underline" href="/portfolio">redeem any winning tokens</a>.
+          {isSettled && m && (
+            <div className="mb-3 rounded-lg border border-yes/40 bg-yes/10 p-3 text-xs">
+              <p className="mb-1 font-semibold text-text">
+                Market settled — {uiState === "won-yes" ? "Yes won" : "No won"}.
+              </p>
+              <p className="text-muted">
+                Closing price{" "}
+                <span className="font-mono">{formatUsdc(m.closingPriceUsd)}</span>{" "}
+                {uiState === "won-yes" ? "≥" : "<"}{" "}
+                <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> (strike). Each{" "}
+                {uiState === "won-yes" ? "Yes" : "No"} token pays $1.00; the losing side pays $0.00.{" "}
+                <a className="underline text-accent" href="/portfolio">
+                  Redeem winning tokens →
+                </a>
+              </p>
+            </div>
+          )}
+          {isExpired && !isSettled && (
+            <div className="mb-3 rounded-lg border border-accent/40 bg-accent/10 p-3 text-xs">
+              <p className="mb-1 font-semibold text-text">Trading closed — awaiting settlement.</p>
+              <p className="text-muted">
+                This market is past its 16:00 ET expiry. The settle cron runs at 16:05 ET and reads
+                the on-chain Pyth feed to set the outcome; admin_settle is the fallback if Pyth is
+                stale beyond 60 minutes. Existing positions are safe and will be redeemable once
+                the outcome is recorded. New orders and pair mints are blocked client-side until
+                then (the on-chain program does not yet enforce the expiry gate, so a sufficiently
+                determined wallet could bypass this UI — tracked in tasks.md).
+              </p>
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">

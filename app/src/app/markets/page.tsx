@@ -4,6 +4,14 @@ import Link from "next/link";
 
 import { useMarkets } from "@/hooks/useMarkets";
 import { formatUsdc } from "@/lib/usdc";
+import {
+  isTradeable,
+  marketUiState,
+  marketUiStateLabel,
+  marketUiStatePillClasses,
+  sessionPhase,
+  sessionPhaseBannerCopy,
+} from "@/lib/marketSession";
 
 // Force runtime rendering — the page depends on the wallet adapter and
 // Anchor client, which pull Node-only modules at module-init time.
@@ -14,14 +22,30 @@ const MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] as const;
 
 export default function MarketsPage() {
   const { data, isLoading, error } = useMarkets();
+  const phase = sessionPhase();
+  const banner = sessionPhaseBannerCopy(phase);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
       <h1 className="mb-2 text-3xl font-bold tracking-tight">Markets</h1>
-      <p className="mb-8 text-muted">
+      <p className="mb-6 text-muted">
         Today's binary outcome contracts. Each strike resolves on the underlying stock's 16:00 ET
-        closing price.
+        closing price (Pyth on-chain feed).
       </p>
+
+      {banner && (
+        <div
+          className={
+            banner.tone === "warn"
+              ? "mb-6 rounded-2xl border border-accent/40 bg-accent/10 p-4"
+              : "mb-6 rounded-2xl border border-panel bg-panel/40 p-4"
+          }
+          role="status"
+        >
+          <p className="mb-1 text-sm font-semibold">{banner.title}</p>
+          <p className="text-xs text-muted">{banner.body}</p>
+        </div>
+      )}
 
       {isLoading && <p className="text-muted">Loading on-chain markets...</p>}
       {error && (
@@ -61,23 +85,38 @@ export default function MarketsPage() {
                 <ul className="space-y-2">
                   {tickerMarkets
                     .sort((a, b) => Number(a.strikeUsd - b.strikeUsd))
-                    .map((m) => (
-                      <li key={m.pubkey}>
-                        <Link
-                          href={`/trade/${m.ticker}/${m.pubkey}`}
-                          className="flex items-center justify-between rounded-lg px-3 py-2 font-mono text-sm hover:bg-bg/50"
-                        >
-                          <span>&gt; {formatUsdc(m.strikeUsd)}</span>
-                          <span className="text-xs text-muted">
-                            {m.outcome === "Pending"
-                              ? "live"
-                              : m.outcome === "YesWins"
-                                ? "Yes won"
-                                : "No won"}
-                          </span>
-                        </Link>
-                      </li>
-                    ))}
+                    .map((m) => {
+                      const state = marketUiState(m);
+                      const clickable = isTradeable(state);
+                      // Non-tradeable rows still link to the trade page so a
+                      // user can read the settled outcome, but the visual
+                      // affordance dims and the pill colour signals why the
+                      // bid panel will be inactive.
+                      return (
+                        <li key={m.pubkey}>
+                          <Link
+                            href={`/trade/${m.ticker}/${m.pubkey}`}
+                            className={
+                              clickable
+                                ? "flex items-center justify-between rounded-lg px-3 py-2 font-mono text-sm hover:bg-bg/50"
+                                : "flex items-center justify-between rounded-lg px-3 py-2 font-mono text-sm text-muted hover:bg-bg/30"
+                            }
+                            title={
+                              clickable
+                                ? undefined
+                                : state === "awaiting-settle"
+                                  ? "Past 16:00 ET expiry. Cannot place new bets; settlement is pending."
+                                  : "Settled. View final outcome and (if you hold) redeem from /portfolio."
+                            }
+                          >
+                            <span>&gt; {formatUsdc(m.strikeUsd)}</span>
+                            <span className={marketUiStatePillClasses(state)}>
+                              {marketUiStateLabel(state)}
+                            </span>
+                          </Link>
+                        </li>
+                      );
+                    })}
                 </ul>
               )}
             </div>
