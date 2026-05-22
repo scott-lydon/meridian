@@ -1,145 +1,209 @@
-# Adversary Report — 2026-05-22 static analysis follow-up
+# Adversary Report — 2026-05-22 static-analysis follow-up
 
-Scope: bug hunt across the Meridian Anchor program + Next.js app + Node automation
-service, kicked off by the user request "analyze the Meridian project for bugs
-and fix them." The qa-adversary sub-agent delegation via claude-code-bridge
-timed out (15-min MCP ceiling, no artifacts produced), so the follow-up red-team
-ran inline in the main session.
+> This file supersedes an earlier implementer self-report at the same path.
+> This is the fresh-context **qa-adversary** red-team pass over commits
+> `1df315f..fb2fc2a`, run per `QA_ADVERSARY.md` + `~/.claude/agents/qa-adversary.md`.
 
-Baseline: HEAD = `1df315f fix(app/hooks): useOrderBookFor distinguishes
-AccountNotFound from real errors` at start of session.
+## Adversary report
 
-## Confirmed bugs and fixes
+### What I challenged
 
-### 1. CRITICAL — `automation/src/lib/pyth-onchain.ts` passed program id where Config PDA was required
+Four commits landed on `main` (`1df315f..fb2fc2a`) addressing static-analysis
+findings across the polyglot Meridian stack: a Rust Anchor program
+(`programs/meridian/`), a Next.js frontend (`app/`), and a Node automation
+service (`automation/`). Test frameworks: Vitest + fast-check for the
+TypeScript property harness (`tests/qa-adversary.property.test.ts`), Anchor TS
+integration tests for on-chain invariants. Base branch: `origin/main`.
 
-Commit: `9acabda fix(automation): pyth-onchain passed program id where Config PDA was required`.
+The change set:
 
-`settleMarketWithPyth` was calling `.accounts({ config: ctx.programId, ... })`
-on the on-chain `settle_market` ix. The `SettleMarket` accounts struct in
-`programs/meridian/src/instructions/settle_market.rs` declares:
+1. `fb2fc2a` — split `InvalidOrderPrice` into distinct `InvalidOrderSide` +
+   `OraclePriceFromFuture` error variants.
+2. `0ce8426` — `useUserPositions` + `useConfig` stop swallowing
+   non-`AccountNotFound` errors.
+3. `367fb7e` — `match_orders` rejects already-settled markets.
+4. `9acabda` — the critical fix: `pyth-onchain.ts` was passing `ctx.programId`
+   where the `SettleMarket` accounts struct demands the Config PDA.
 
-```rust
-#[account(
-    seeds = [CONFIG_SEED, &[PROGRAM_VERSION]],
-    bump = config.bump,
-)]
-pub config: Box<Account<'info, Config>>,
-```
+I treated every fix as guilty until proven correct: tried to bypass the
+settled-market guard, hunted for other `config:`-account mis-wirings, checked
+whether the new oracle error path admits any input the old code rejected, and
+checked whether the hook re-throws can produce infinite retry loops or
+unhandled rejections.
 
-Passing the executable program account makes Anchor reject the tx at the
-discriminator / seed check before any Pyth validation runs. Production was
-silently exhausting the 15-minute Pyth retry window every trading day, then
-falling through to `admin_settle` (which itself enforces a 1-hour delay from
-market creation). Net effect: markets settled an hour late, every day, with
-the operator chasing a Pyth-availability symptom instead of the broken account
-wiring.
+### Findings
 
-Fix imports `configPda` from the same `./anchor.js` helper that `morning.ts`
-and `settlement.ts` already use, plus adds a WTF heads-up comment so a future
-reader cannot make the same swap.
+**No blocking or concerning findings. All four fixes are correct.** Details of
+what I verified, and three nits, below.
 
-### 2. HIGH — `match_orders` did not block on settled markets (post-settle arbitrage)
+1. **`match_orders` settled-market guard is sound — no bypass.** *(nit-level
+   confirmation, not a finding)* The guard
+   (`match_orders.rs:101-104`) is `require!(!ctx.accounts.market.outcome.is_settled(), ...)`
+   at the top of `handler`, before the book is loaded. `is_settled()`
+   (`state.rs:137-138`) returns `!matches!(state, OutcomeState::Pending)`, so
+   both `YesWins`/`NoWins` from `settle_market` *and* from `admin_settle` trip
+   it. No TOCTOU: a Solana instruction deserializes its accounts once at entry
+   and runs to completion with no interleaving; the only way `market` could be
+   settled "between the check and the CPIs" is a *prior* instruction in the
+   same tx, which would settle it *before* `match_orders` runs and is then
+   caught by this very `require!`. `market` is bound to `order_book` via
+   `seeds = [ORDER_BOOK_SEED, market.key().as_ref(), ...]`, so you cannot feed
+   a settled market's book under an unsettled market account. The CPIs target
+   the SPL token program, which cannot mutate our `Market`. Guard holds.
 
-Commit: `367fb7e fix(program): match_orders rejects already-settled markets`.
+   Corroborating: `place_order.rs:74-76` already carried the identical
+   `is_settled()` + `MarketAlreadySettled` guard, and `cancel_order.rs` has
+   *no* such guard (correct — makers must recover escrow post-settle). So
+   `367fb7e` closes the last unguarded mutation path and the comment's claim
+   "Cancel still works post-settle" is accurate.
 
-`place_order` rejects on settled markets, but `match_orders` had no such guard.
-Resting orders kept crossing at their pre-settle prices even though Yes was
-now worth exactly $1.00 or $0.00. That handed free arbitrage to whoever ran
-the cranker: match a stale ask at 50 ticks, redeem the Yes for $1.00, pocket
-the spread at the maker's expense. `cancel_order` still works post-settle so
-makers retain the ability to pull escrow back.
+2. **The Config PDA fix is correct and complete.** `configPda(ctx.programId)`
+   (`anchor.ts:126-131`) derives `[CONFIG_SEED, PROGRAM_VERSION_BYTE]` =
+   `["config", [1]]`, byte-identical to the Rust constraint
+   `seeds = [CONFIG_SEED, &[PROGRAM_VERSION]]` (`settle_market.rs:19-23`;
+   `CONFIG_SEED = b"config"`, `PROGRAM_VERSION = 1u8`, `constants.rs`). I
+   grepped every `.accounts({...})` call in `automation/src` for a `config:`
+   key: three sites total —
+   `pyth-onchain.ts:71` (`configPda(ctx.programId)` ✓),
+   `settlement.ts:114` (`configPda(ctx.programId)` ✓),
+   `morning.ts:117` (`config: cfg` where `cfg = configPda(ctx.programId)` at
+   `morning.ts:59` ✓). **No other mis-wired `config:` account remains.**
 
-### 3. MEDIUM — silent catch-log-continue in three hook locations (Constitution §2.4)
+3. **`OraclePriceFromFuture` preserves the safety property and admits no new
+   path.** Old: `if age < 0 || (age as u64) > max_staleness { reject }`. New:
+   `if age < 0 { reject as OraclePriceFromFuture } if (age as u64) > max { reject as OraclePriceStale }`.
+   The set of `(age)` values that produce *an error* is bit-identical before
+   and after — only the error *variant* differs. Negative age is still
+   rejected. `age >= 0` is guaranteed before the `as u64` cast, so no wrap.
+   `age == 0` (publish == now) still passes both checks, same as before. This
+   is a strict refinement, not a behavior change.
 
-Commits:
-- `0ce8426 fix(app/hooks): stop swallowing non-AccountNotFound errors in useUserPositions + useConfig`
-- (this session) trade page local order-book fetcher patched separately.
+4. **Hook re-throws do not loop or leak — nit only.** Global `QueryClient`
+   (`queryClient.ts:8-21`) sets `retry: 1`. `useOrderBookFor` and
+   `useUserPositions` set `refetchInterval: 5_000`; `useConfig` sets neither.
+   A thrown `Error` from a `queryFn` is awaited and caught by React Query —
+   **no unhandled promise rejection**. On a sustained RPC outage the two
+   interval hooks re-run the throwing `queryFn` every 5 s (1 retry each), which
+   is a paced poll, **not an infinite tight loop**, and is the intended
+   "recover when RPC returns" behavior. `useConfig` retries once then rests in
+   error state until invalidation/remount. All correct.
 
-Three sites used bare `catch (() => null)` or `catch {} return null;` patterns
-that converted RPC outages, IDL drift, and decode errors into the same
-indistinguishable "no data" state the user sees as missing balances or
-silently mis-priced marks. Mirrors the allowlist the user themselves added
-to `useOrderBookFor` in `1df315f`: only Anchor's literal `Account does not
-exist` / `could not find account` errors stay null (legitimate "not
-initialised" state); everything else re-throws with the PDA address baked into
-the message so React Query devtools shows the real cause.
+   *Nit (concerning-adjacent, by design):* `useUserPositions.queryFn` loops
+   over all markets and `await`s `fetchOrderBookSnapshot` per pending market
+   (`useUserPositions.ts:148`) with no per-market try/catch. A real (non
+   not-found) RPC error on the *Nth* market now throws out of the whole
+   `queryFn`, so the entire portfolio renders an error instead of showing the
+   already-fetched markets `1..N-1`. Pre-fix, that market silently got
+   pair-only valuation and the rest rendered. This is the deliberate
+   "surface loudly" trade-off from Constitution §2.4 and the commit message
+   endorses it — flagging only so it is a *known* trade-off, not a surprise.
 
-### 4. LOW — misleading on-chain error variants (Constitution §3 "vague errors are bugs")
+5. **`useOrderBookFor` allowlist regex is fragile to Anchor wording — nit.**
+   All three hooks key on `/Account does not exist|could not find account/i`.
+   Anchor 0.31's `AccountClient.fetch` throws `Account does not exist or has
+   no data <addr>` — the substring `Account does not exist` matches, so it is
+   covered today (pinned by a new harness test, below). But this couples the
+   "legitimate empty state" decision to an upstream library's *error string*.
+   If a future Anchor bump rewords it, every "not initialised yet" market/book
+   would start hard-erroring. Recommend (not blocking) classifying on a typed
+   cause where Anchor exposes one, or pinning the Anchor version.
 
-Commit: `fb2fc2a feat(program): split misleading error variants into InvalidOrderSide + OraclePriceFromFuture`.
+### Tests added
 
-- `OrderSide::from_u8` returned `InvalidOrderPrice` for a corrupted side byte.
-  Price had nothing to do with the failure; the cranker log was lying about
-  which field was bad.
-- `settle_market` returned `OraclePriceStale` for Pyth updates whose
-  `publish_time` was in the future relative to the on-chain clock (clock skew
-  on the cranker). "Stale" means old; future-dated is the opposite failure
-  mode. Each now has its own variant + log line.
+`tests/qa-adversary.property.test.ts`, harness grew **20 → 28 tests**, all pass
+in ~27 ms:
 
-Both new variants follow the constitution's rule that the on-chain log alone
-must identify which check failed.
+- **`describe("qa-adversary: Config PDA derivation ...")`** — 3 tests *(present
+  in the working tree at the start of this pass; verified, not authored here)*.
+  Pins the `b"config"` / `PROGRAM_VERSION=1` seed bytes and source-greps the
+  three `automation` `.accounts({})` call sites so a regression to
+  `config: ctx.programId` / `config: program.programId` fails the harness.
+  Reproduction check: reverting `9acabda` makes the permutation test fail with
+  a pointer at `pyth-onchain.ts`; restoring it re-passes. **Catches bug #4.**
 
-### 5. CRUFT — `automation/src/index 2.ts` (macOS Finder duplicate)
+- **`describe("qa-adversary: fetch-error classification ...")`** — 5 tests
+  *(added by this qa-adversary pass)*. Mirrors the
+  `/Account does not exist|could not find account/i` allowlist shared by
+  `useOrderBookFor.ts`, `useConfig.ts`, and `useUserPositions.ts` as the pure
+  function `classifyFetchError(message) → "empty" | "rethrow"`. Properties:
+  any message wrapping a not-found marker → `"empty"`; case-insensitivity;
+  **8 concrete real-failure strings (RPC refused, IDL drift, decode error,
+  rate-limit, timeout) must classify as `"rethrow"`**; any marker-free string
+  → `"rethrow"`; and the exact Anchor 0.31 not-found string → `"empty"`.
+  Before `0ce8426` the catch block was `catch { return null }`, i.e.
+  `classifyFetchError ≡ () => "empty"` — the four "rethrow" assertions all
+  fail against that pre-fix behavior. **This block would have caught bug #2 if
+  run before the fix.**
 
-Untracked Finder-duplicate file in the automation source tree, last modified
-2026-05-21. Deleted with plain `rm` (untracked, no git history to preserve).
-Risk: a future search-and-edit could land in the stale copy by accident.
+### Mutation escapes
 
-## Harness extensions
+(mutation testing not configured — no `stryker.conf.*` in any workspace; see
+Recommendations)
 
-Added three new property / permutation tests to
-`tests/qa-adversary.property.test.ts` under a new
-`describe("qa-adversary: Config PDA derivation (anchor.ts / pyth-onchain.ts)")`
-block:
+### What I tried that did not break
 
-1. Pins the seed bytes (`b"config"` length 6, `PROGRAM_VERSION = 1`).
-2. Source-level grep across `automation/src/lib/pyth-onchain.ts`,
-   `automation/src/jobs/morning.ts`, `automation/src/jobs/settlement.ts` —
-   asserts no `config:\s*ctx\.programId\b` or `config:\s*program\.programId\b`
-   in the `.accounts({ ... })` braces. Function calls like
-   `configPda(ctx.programId)` pass this regex on purpose.
-3. Smoke for the fixture program id (base58 sanity).
+- Settling a market *between* `match_orders`' `require!` and its CPIs — not
+  reachable; single-instruction atomicity forbids interleaving, and a same-tx
+  prior `settle_market` is caught by the guard.
+- Feeding `match_orders` a settled market's order book under a different,
+  unsettled `Market` account — blocked by the `order_book` PDA seed binding.
+- A second `config:`-account mis-wiring elsewhere in `automation/` — grepped
+  all three `.accounts({})` sites; all use `configPda(...)`.
+- `age == 0` and `age` near `i64`/`u64` boundaries in `settle_market` —
+  `saturating_sub` + the `age < 0` early return make the `as u64` cast safe;
+  accept/reject set unchanged vs. pre-fix.
+- Driving the hooks into an infinite React Query retry loop or an unhandled
+  rejection — `retry: 1`, interval-paced, promise owned by React Query.
+- A "not initialised yet" book/config whose Anchor error string falls outside
+  the allowlist (would cause a spurious hard error) — Anchor 0.31's actual
+  message contains `Account does not exist`; pinned by a new harness test.
+- `OrderSide::from_u8` with a corrupted side byte — now returns
+  `InvalidOrderSide`; the only callers pass `0`/`1` or persisted bytes, and
+  the discriminator harness check (`KNOWN_METHODS`) is unaffected (no
+  instruction added/renamed).
 
-Reproducibility check: temporarily reverted the commit-1 fix locally, the
-permutation test failed with a clear pointer at the offending line; restored
-fix and the test re-passed. Net harness state: 20 tests → 23 tests, all pass.
+### Recommendations
+
+- **Wire mutation testing** for the harness's mirrored pure functions
+  (`markValueUsdcMicros`, `quoteFromBook`, `bs58encode/decode`,
+  `classifyFetchError`). Stryker on `tests/` would quantify whether the
+  property assertions actually pin behavior. Not blocking.
+- **Decouple the empty-state decision from Anchor's error string** (Finding 5)
+  — classify on a typed/coded cause if Anchor exposes one, or pin the Anchor
+  version so a minor bump cannot reword the message out of the allowlist.
+- **`anchor build` / `anchor test` were intentionally skipped** (no local
+  validator; per the task brief). The settled-market guard (#1) and the
+  oracle-from-future variant (#3) are on-chain logic — property tests +
+  `cargo`-level typing cover the reasoning, but the next full CI run with a
+  validator should still exercise `tests/meridian.test.ts`. Add a Rust
+  failure-path test asserting `match_orders` on a settled market returns
+  exactly `MarketAlreadySettled` (per `QA_ADVERSARY.md`'s named-variant rule).
 
 ## Pipeline run
 
 ```
-pnpm -r typecheck                                       ✓ all 3 workspaces (app, automation, tests) clean
-cd tests && vitest run qa-adversary.property.test.ts    ✓ 23/23 in 309 ms
-pnpm -r lint                                            74 pre-existing eslint errors in automation,
-                                                         tests workspace has no eslint v9 config
-                                                         (both pre-date this session; no new lint
-                                                         regressions introduced by this diff)
-cargo check -p meridian                                 ✓ compiles; 27 pre-existing warnings, none
-                                                         touch the edited files
-anchor build / anchor test                              not run (requires local validator boot;
-                                                         change set covered by property tests +
-                                                         typecheck)
+pnpm -r typecheck                                    ✓ app, automation, tests — all clean
+cd tests && vitest run qa-adversary.property.test.ts ✓ 28/28 passed (~27 ms)
+pnpm -r lint                                         see notes below — NO regressions from this diff
+anchor build / anchor test                           skipped (no local validator; per task brief)
 ```
 
-## What I did NOT change (and why)
+Lint detail (only regressions vs. this diff are flagged, per the brief):
 
-- `match_orders` is still callable when `config.paused == true`. By design per
-  `pause.rs` ("redeem keeps working" pattern); existing crossings still settle
-  so users don't get trapped. Flagging here for awareness — not a bug.
-- `useUserHistory.ts:128-132` has a bare `catch { return null; }` around
-  `bs58decode`. Legitimate: non-Meridian instructions that look base58-shaped
-  but aren't (different tx mixed into a Meridian-touching account history)
-  should be skipped, not blow up the history page. The caller filters null.
-- Per-market sequential retry loop in `settlement.ts` (15-min window each ×
-  21 markets = 5+ hours worst case). This is a perf bug, not correctness; the
-  user already shipped one fix here (`7ba76ac`) and explicitly flagged the
-  area as high-churn. Leaving alone unless asked.
-- `useConfig` still wraps the whole try in a single block. Could split the
-  fetch from the decode for finer-grained errors. Deferred — current fix
-  removes the silent-swallow class, finer split is polish.
+- `automation` — 74 pre-existing ESLint errors. `pyth-onchain.ts` specifically:
+  **12 errors before `9acabda`, 12 after** (verified by linting the pre-commit
+  file content). The fix added a typed `configPda` import that is used, so it
+  introduces no new `no-unused-vars`/`no-unsafe-*` errors. **No regression.**
+- `app` — `next lint` fails to *load* its config
+  (`Failed to load config "next/typescript"`). Pre-existing environment
+  breakage; the diff did not touch `app/.eslintrc.json` or its deps. The
+  changed hook files are nonetheless covered by `tsc` (typecheck passes).
+- `tests` — no ESLint v9 flat config; pre-existing. New harness code covered
+  by `tsc`.
 
 ## QA verdict
 
-PASS — 23/23 property tests, no typecheck regressions, no lint regressions,
-cargo check clean, all 5 fix commits pushed to both GitHub and GitLab origins
-(dual-push verified by `git ls-remote` matching SHAs).
+PASS — 28/28 property tests, no typecheck regressions, no lint regressions
+attributable to this diff. All four fixes (`1df315f..fb2fc2a`) verified
+correct under adversarial review; no blocking or concerning findings; two
+documented design trade-offs and one fragility nit recorded above.

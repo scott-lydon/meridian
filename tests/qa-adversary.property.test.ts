@@ -478,3 +478,99 @@ describe("qa-adversary: quoteFromBook (useOrderBookFor)", () => {
     );
   });
 });
+
+// ============================================================================
+// Mirrored from app/src/hooks/useOrderBookFor.ts, useConfig.ts, and
+// useUserPositions.ts — the fetch-error allowlist (commits 1df315f / 0ce8426).
+//
+// All three hooks wrap an Anchor `.fetch()` and must distinguish the ONE
+// legitimate empty state ("account not initialised yet" → return null) from
+// every real failure (RPC outage, decode error, IDL drift → THROW so the bug
+// is surfaced, never silently fed into a portfolio mark as "no book → no mid").
+// The three production sites share the IDENTICAL regex; this is the single
+// mirror. Per the file header rule: if any of the three production regexes
+// changes, this mirror changes in the SAME commit.
+//
+// Before commit 0ce8426 the catch block was `catch { return null }` — i.e.
+// classifyFetchError was effectively `() => "empty"` for EVERY input, which is
+// exactly the error-swallowing bug. The "rethrow" properties below fail
+// against that pre-fix behaviour, so this block would have caught the bug if
+// run before the fix.
+// ============================================================================
+type FetchErrorDisposition = "empty" | "rethrow";
+
+function classifyFetchError(message: string): FetchErrorDisposition {
+  // MUST stay byte-identical to the regex in all three hooks.
+  return /Account does not exist|could not find account/i.test(message)
+    ? "empty"
+    : "rethrow";
+}
+
+describe("qa-adversary: fetch-error classification (useOrderBookFor / useConfig / useUserPositions)", () => {
+  // The two markers the production allowlist treats as "account not yet
+  // initialised". Anything else is a real bug and must be re-thrown.
+  const EMPTY_STATE_MARKERS = ["Account does not exist", "could not find account"];
+
+  it("invariant: any message containing an AccountNotFound marker classifies as 'empty'", () => {
+    fc.assert(
+      fc.property(
+        fc.string(),
+        fc.string(),
+        fc.constantFrom(...EMPTY_STATE_MARKERS),
+        (prefix, suffix, marker) => {
+          // The real Anchor error wraps the marker in address text on both
+          // sides; classification must survive arbitrary surrounding context.
+          return classifyFetchError(`${prefix}${marker}${suffix}`) === "empty";
+        },
+      ),
+    );
+  });
+
+  it("invariant: case-insensitive — a lower/upper-cased marker still classifies as 'empty'", () => {
+    fc.assert(
+      fc.property(fc.constantFrom(...EMPTY_STATE_MARKERS), (marker) => {
+        return (
+          classifyFetchError(marker.toLowerCase()) === "empty" &&
+          classifyFetchError(marker.toUpperCase()) === "empty"
+        );
+      }),
+    );
+  });
+
+  it("invariant: real failures NEVER classify as 'empty' (no silent swallow)", () => {
+    // This is the property the pre-0ce8426 `catch { return null }` violated:
+    // it swallowed every one of these as a legitimate empty state, feeding a
+    // fake "no data" into the portfolio / config UI.
+    const realFailures = [
+      "failed to get info about account 9xQ...: Connection refused",
+      "Invalid account discriminator",
+      "fetch failed",
+      "503 Service Unavailable",
+      "Account does not have enough data to be parsed", // decode/IDL drift — NOT a not-found
+      "TypeError: Cannot read properties of undefined (reading 'fetch')",
+      "request to https://api.devnet.solana.com failed, reason: ETIMEDOUT",
+      "JSON-RPC error: -32005 rate limited",
+    ];
+    for (const msg of realFailures) {
+      expect(classifyFetchError(msg)).toBe("rethrow");
+    }
+  });
+
+  it("invariant: any message with no marker substring classifies as 'rethrow'", () => {
+    fc.assert(
+      fc.property(fc.string(), (s) => {
+        fc.pre(!/Account does not exist|could not find account/i.test(s));
+        return classifyFetchError(s) === "rethrow";
+      }),
+    );
+  });
+
+  it("anchor: the exact Anchor 0.31 not-found message classifies as 'empty'", () => {
+    // Anchor's AccountClient.fetch throws this verbatim when the account is null.
+    expect(
+      classifyFetchError(
+        "Account does not exist or has no data 7Np41oeYqPefeNQEHSv1UDhYrehxin3NStELsSKCT4K2",
+      ),
+    ).toBe("empty");
+  });
+});
