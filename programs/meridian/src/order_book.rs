@@ -1,13 +1,15 @@
 //! In-program order book (slab-based CLOB) — zero-copy layout.
 //!
-//! `OrderBook` is ~28KB which would overflow the 4KB BPF stack on borsh
-//! deserialize. We use Anchor's `#[account(zero_copy(unsafe))]` so the
-//! account is read directly from raw bytes (no copy, no stack churn).
+//! `OrderBook` is ~7.3KB at the current capacity of 64 per side. At plan.md's
+//! original spec of 256 per side it was ~28KB and would overflow the 4KB BPF
+//! stack on borsh deserialize, so we use Anchor's `#[account(zero_copy(unsafe))]`
+//! and read the account directly from raw bytes (no copy, no stack churn).
 //! That requires Pod-compatible fields: every field repr(C), no padding,
 //! no Rust enums (we use a `side` u8 instead).
 //!
-//! Capacity 256 per side per plan.md D3. Bids sorted descending by price,
-//! asks ascending, FIFO at same price.
+//! Capacity 64 per side (down from plan.md D3's 256 to fit Solana's 10240-byte
+//! CPI-create-account realloc ceiling). Bids sorted descending by price, asks
+//! ascending, FIFO at same price.
 
 use anchor_lang::prelude::*;
 
@@ -95,8 +97,8 @@ pub struct OrderBook {
     pub bump: u8,                                  // 1
     pub version: u8,                               // 1
     pub _pad0: [u8; 6],                            // 6 — align bids[] to 8
-    pub bids: [Order; MAX_DEPTH_PER_SIDE],         // 14_336
-    pub asks: [Order; MAX_DEPTH_PER_SIDE],         // 14_336
+    pub bids: [Order; MAX_DEPTH_PER_SIDE],         // 64 * 56 = 3_584
+    pub asks: [Order; MAX_DEPTH_PER_SIDE],         // 64 * 56 = 3_584
 }
 
 impl OrderBook {
