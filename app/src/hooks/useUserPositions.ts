@@ -86,7 +86,22 @@ function fetchOrderBookSnapshot(
         });
       return { bids: orders(rr.bids, rr.bidsLen), asks: orders(rr.asks, rr.asksLen) };
     })
-    .catch(() => null);
+    .catch((err: unknown) => {
+      // Constitution §2.4: no catch-log-continue. The ONLY legitimate empty
+      // state is "the order book PDA hasn't been initialised for this market
+      // yet" — every other failure (RPC outage, decode error, IDL drift) is a
+      // real bug we want surfaced as a hard error, not silently fed into the
+      // portfolio's mark-to-market as "no book → no mid → pair-only value".
+      // Mirrors the same allowlist used by useOrderBookFor.ts.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/Account does not exist|could not find account/i.test(msg)) {
+        return null;
+      }
+      throw new Error(
+        `useUserPositions.fetchOrderBookSnapshot: failed to load order book for market ${marketPubkey.toBase58()} (book PDA ${bookPda.toBase58()}): ${msg}`,
+        { cause: err instanceof Error ? err : undefined },
+      );
+    });
 }
 
 export function useUserPositions() {
