@@ -5,7 +5,10 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "echo 'anchor tests run via `anchor test` from repo root'",
+    "test": "vitest run qa-adversary.property.test.ts",
+    "test:adversary": "vitest run qa-adversary.property.test.ts",
+    "test:adversary:watch": "vitest watch qa-adversary.property.test.ts",
+    "test:anchor:note": "echo 'on-chain integration tests run via `anchor test` from repo root, not here'",
     "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit"
   },
