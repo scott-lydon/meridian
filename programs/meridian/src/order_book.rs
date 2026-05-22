@@ -39,10 +39,13 @@ impl OrderSide {
     }
 
     pub fn from_u8(b: u8) -> Result<Self> {
+        // Distinct error from `InvalidOrderPrice` so a corrupted side byte in a
+        // zero-copy Order record is diagnosable from the on-chain log alone
+        // instead of looking like a routine bad-price rejection.
         match b {
             0 => Ok(Self::Bid),
             1 => Ok(Self::Ask),
-            _ => err!(MeridianError::InvalidOrderPrice),
+            _ => err!(MeridianError::InvalidOrderSide),
         }
     }
 }

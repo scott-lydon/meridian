@@ -91,4 +91,10 @@ pub enum MeridianError {
 
     #[msg("Order price must be between 1 and 99 ticks ($0.01 to $0.99)")]
     InvalidOrderPrice,
+
+    #[msg("Order side byte is neither 0 (Bid) nor 1 (Ask) — corrupted Order record")]
+    InvalidOrderSide,
+
+    #[msg("Pyth publish_time is in the future relative to on-chain clock — likely cranker clock skew")]
+    OraclePriceFromFuture,
 }

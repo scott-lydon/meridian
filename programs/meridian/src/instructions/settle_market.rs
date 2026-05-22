@@ -51,10 +51,25 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
         return err!(MeridianError::OracleFeedMismatch);
     }
 
-    // Staleness check (expressive)
+    // Staleness check (expressive). A negative age means the Pyth update's
+    // publish_time is in the future relative to our on-chain clock — that's
+    // not "stale", it's clock skew on whichever Hermes/cranker produced the
+    // VAA. Emit the distinct OraclePriceFromFuture variant so the on-chain
+    // log + the cranker's debug loop don't conflate the two and chase the
+    // wrong fix. The age is then guaranteed >= 0, so the `as u64` cast can
+    // never wrap into a giant positive that masquerades as "fresh".
     let publish_time = pu.price_message.publish_time;
     let age = now.saturating_sub(publish_time);
-    if age < 0 || (age as u64) > ctx.accounts.config.max_staleness_secs {
+    if age < 0 {
+        msg!(
+            "OraclePriceFromFuture: now={} publish_time={} (publish_time is {}s ahead of on-chain clock)",
+            now,
+            publish_time,
+            -age
+        );
+        return err!(MeridianError::OraclePriceFromFuture);
+    }
+    if (age as u64) > ctx.accounts.config.max_staleness_secs {
         msg!(
             "OraclePriceStale: now={} publish_time={} age={}s but max_staleness={}s",
             now,
