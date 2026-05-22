@@ -79,8 +79,23 @@ function useOrderBookFor(marketPubkey: string) {
           bids: orders(raw.bids, raw.bidsLen),
           asks: orders(raw.asks, raw.asksLen),
         };
-      } catch {
-        return null;
+      } catch (err) {
+        // Constitution §2.4: no catch-log-continue. Only the literal Anchor
+        // "account does not exist" path is a legitimate null (book not yet
+        // initialised for this market); every other failure (RPC outage,
+        // decode error, IDL drift) must surface so the trade page does not
+        // silently show "no liquidity" when the real problem is the network.
+        // Mirrors the shared @/hooks/useOrderBookFor allowlist. This local
+        // duplicate exists pre-refactor; a follow-up should delete it and
+        // import the shared hook instead.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/Account does not exist|could not find account/i.test(msg)) {
+          return null;
+        }
+        throw new Error(
+          `TradePage.useOrderBookFor: failed to load order book for market ${marketPubkey} (book PDA ${bookPda.toBase58()}): ${msg}`,
+          { cause: err instanceof Error ? err : undefined },
+        );
       }
     },
     refetchInterval: 2_000,
