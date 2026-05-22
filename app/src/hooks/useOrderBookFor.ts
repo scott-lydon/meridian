@@ -77,9 +77,19 @@ export function useOrderBookFor(marketPubkey: string | undefined) {
           bids: orders(raw.bids, raw.bidsLen),
           asks: orders(raw.asks, raw.asksLen),
         };
-      } catch {
-        // Book account not initialized for this market yet (legitimate empty state).
-        return null;
+      } catch (err) {
+        // ONLY "account does not exist" is a legitimate empty state — anything
+        // else (RPC outage, decode error, IDL drift) is a real bug we must
+        // surface, not silently swallow.  Constitution §2.4: no catch-log-continue.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/Account does not exist|could not find account/i.test(msg)) {
+          return null;
+        }
+        // Re-throw with enough context to debug from the React Query devtools.
+        throw new Error(
+          `useOrderBookFor: failed to load order book for market ${marketPubkey} (book PDA ${bookPda.toBase58()}): ${msg}`,
+          { cause: err instanceof Error ? err : undefined },
+        );
       }
     },
     refetchInterval: 5_000,
