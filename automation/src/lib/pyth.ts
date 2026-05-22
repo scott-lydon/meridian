@@ -81,6 +81,11 @@ export class PythClient {
     const rawPrice = BigInt(entry.price.price);
     const rawConf = BigInt(entry.price.conf);
     const expo = entry.price.expo;
+    // WTF heads-up: parsing as BigInt then coercing to Number looks lossy,
+    // but Pyth equity feeds use expo around -8, which keeps the raw integer
+    // in the low billions even for $1000 stocks (well under 2^53). Exact
+    // for these feeds. Do NOT copy this pattern for crypto feeds where the
+    // raw value can exceed 2^53 and silent precision loss starts.
     const scaled = Number(rawPrice) * 10 ** expo;
     const confScaled = Number(rawConf) * 10 ** expo;
 

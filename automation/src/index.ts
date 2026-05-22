@@ -24,6 +24,11 @@ const MORNING_CRON = "0 8 * * 1-5";
 const SETTLEMENT_CRON = "5 16 * * 1-5";
 
 const morningJob = new Cron(MORNING_CRON, { timezone: env.TZ, name: "morning" }, async () => {
+  // WTF guard: this looks like the catch-log-continue forbidden by
+  // constitution §2.4, but throwing out of a croner callback kills the
+  // whole cron loop (tomorrow's run never fires). We log and swallow so
+  // a bad day doesn't take the schedule with it; Slack alerts inside
+  // runMorningJob still surface the failure to humans.
   try {
     const result = await runMorningJob(env);
     lastMorningRun = { at: new Date().toISOString(), result };
@@ -36,6 +41,8 @@ const settlementJob = new Cron(
   SETTLEMENT_CRON,
   { timezone: env.TZ, name: "settlement" },
   async () => {
+    // Same WTF guard as the morning job above: croner unmounts the cron
+    // if the callback throws, so we eat the error and keep the schedule.
     try {
       const result = await runSettlementJob(env);
       lastSettlementRun = { at: new Date().toISOString(), result };

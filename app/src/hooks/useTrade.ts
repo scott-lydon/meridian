@@ -115,7 +115,11 @@ export function useTrade(marketPubkey: string | undefined) {
       if (!publicKey || !marketPubkey) throw new Error("wallet or market missing");
       const addrs = deriveMarketAddresses(program.programId, new PublicKey(marketPubkey));
       const { atas, createIxs } = await ensureAtas(addrs);
-      // place_order(Bid, priceTicks, qty)
+      // place_order(Bid, priceTicks, qty).
+      // WTF heads-up: Anchor's JS client encodes a Rust enum argument as a
+      // single-key object with an empty payload. `OrderSide::Bid` becomes
+      // `{ bid: {} }`, `OrderSide::Ask` becomes `{ ask: {} }`. The same
+      // shape appears throughout this file (sellYes, cancelOrder, etc.).
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ix = await (program.methods as any)
         .placeOrder({ bid: {} }, priceTicks, new BN(qty))

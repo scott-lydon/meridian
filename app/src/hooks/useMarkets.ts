@@ -34,6 +34,9 @@ export function useMarkets() {
       return raws.map((r) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const a: any = r.account;
+        // WTF heads-up: Anchor serializes a Rust enum into JS as a single-key
+        // object with an empty payload, e.g. `OutcomeState::YesWins` arrives
+        // as `{ yesWins: {} }`. Taking the only key recovers the variant name.
         const outcomeState = Object.keys(a.outcome.state)[0] ?? "pending";
         const outcome =
           outcomeState === "yesWins" ? "YesWins" : outcomeState === "noWins" ? "NoWins" : "Pending";
