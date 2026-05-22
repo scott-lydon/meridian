@@ -749,6 +749,16 @@ export type Meridian = {
           "writable": true
         },
         {
+          "name": "bidMakerUsdc",
+          "docs": [
+            "USDC ATA of the resting-bid owner. Receives the price-improvement",
+            "refund when the bidder is the taker (`ask.sequence < bid.sequence`",
+            "and `bid.price > ask.price`). Always required so the IDL is stable;",
+            "when no refund is owed the transfer amount is zero."
+          ],
+          "writable": true
+        },
+        {
           "name": "cranker",
           "docs": [
             "Cranker pays the tx fee. Can be anyone."

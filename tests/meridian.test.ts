@@ -542,12 +542,18 @@ describe("meridian slice 3 — order book", () => {
     const userYesBefore = Number((await getAccount(provider.connection, userYes)).amount);
     const user2UsdcBefore = Number((await getAccount(provider.connection, user2Usdc)).amount);
 
-    // Cross via match_orders
+    // Cross via match_orders.
+    //
+    // NOTE: `bidMakerUsdc` is required as of the 2026-05-22 price-improvement
+    // refund fix. Both makers crossed at the SAME price (55) in this test, so
+    // the refund amount is zero, but the account must still be supplied so the
+    // ix encodes against the new IDL. A separate test below exercises a real
+    // refund.
     await program.methods.matchOrders()
       .accounts({
         config: configPda, market: marketPda, orderBook: orderBookPda,
         bookAuthority: bookAuthPda, usdcEscrow, yesEscrow,
-        askMakerUsdc: user2Usdc, bidMakerYes: userYes,
+        askMakerUsdc: user2Usdc, bidMakerYes: userYes, bidMakerUsdc: userUsdc,
         cranker: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
       })
       .rpc();
@@ -569,6 +575,97 @@ describe("meridian slice 3 — order book", () => {
         user: user.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
       })
       .signers([user]).rpc();
+  });
+
+  // Regression test for the 2026-05-22 price-improvement-refund bug.
+  //
+  // The prior version of `match_orders` consumed `bid_price * qty` USDC from
+  // escrow even when the maker was the ask (older order at a lower price).
+  // The (bid_price - ask_price) * qty difference was permanently locked in
+  // `usdc_escrow` and unrecoverable via cancel_order once the bid was fully
+  // filled. This test forces that exact sequence (ask 40 first, bid 60 later)
+  // and asserts the bidder receives the spread as a refund.
+  it("match_orders refunds price improvement to taker (ask first, bid later)", async () => {
+    // Need fresh wallets so we are not racing the cancel_order test on the
+    // existing book. Two new users.
+    const askMaker = Keypair.generate();
+    const bidMaker = Keypair.generate();
+    for (const kp of [askMaker, bidMaker]) {
+      const s = await provider.connection.requestAirdrop(kp.publicKey, 2e9);
+      await provider.connection.confirmTransaction(s, "confirmed");
+    }
+    const askUsdc = await createAssociatedTokenAccount(provider.connection, askMaker, usdcMint, askMaker.publicKey);
+    const askYes = await createAssociatedTokenAccount(provider.connection, askMaker, yesMintPda, askMaker.publicKey);
+    const askNo = await createAssociatedTokenAccount(provider.connection, askMaker, noMintPda, askMaker.publicKey);
+    const bidUsdc = await createAssociatedTokenAccount(provider.connection, bidMaker, usdcMint, bidMaker.publicKey);
+    const bidYes = await createAssociatedTokenAccount(provider.connection, bidMaker, yesMintPda, bidMaker.publicKey);
+    const bidNo = await createAssociatedTokenAccount(provider.connection, bidMaker, noMintPda, bidMaker.publicKey);
+
+    await mintTo(provider.connection, admin, usdcMint, askUsdc, admin, 20 * USDC_BASE);
+    await mintTo(provider.connection, admin, usdcMint, bidUsdc, admin, 20 * USDC_BASE);
+
+    // askMaker mints 5 pairs (gets 5 Yes + 5 No), then places ASK at 40 ticks.
+    await program.methods.mintPair(new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, vaultAuthority: vaultAuthPda,
+        yesMint: yesMintPda, noMint: noMintPda, vault: vaultAta,
+        userUsdc: askUsdc, userYes: askYes, userNo: askNo,
+        user: askMaker.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([askMaker]).rpc();
+    await program.methods.placeOrder({ ask: {} }, 40, new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        usdcEscrow, yesEscrow, userUsdc: askUsdc, userYes: askYes, yesMint: yesMintPda,
+        user: askMaker.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([askMaker]).rpc();
+
+    // bidMaker places BID at 60 ticks (escrows 60 * 10_000 * 5 = $3.00).
+    await program.methods.placeOrder({ bid: {} }, 60, new BN(5))
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        usdcEscrow, yesEscrow, userUsdc: bidUsdc, userYes: bidYes, yesMint: yesMintPda,
+        user: bidMaker.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([bidMaker]).rpc();
+
+    // Snapshots before the cross.
+    const bidUsdcBefore = Number((await getAccount(provider.connection, bidUsdc)).amount);
+    const askUsdcBefore = Number((await getAccount(provider.connection, askUsdc)).amount);
+    const bidYesBefore = Number((await getAccount(provider.connection, bidYes)).amount);
+    const escrowBefore = Number((await getAccount(provider.connection, usdcEscrow)).amount);
+
+    await program.methods.matchOrders()
+      .accounts({
+        config: configPda, market: marketPda, orderBook: orderBookPda,
+        bookAuthority: bookAuthPda, usdcEscrow, yesEscrow,
+        askMakerUsdc: askUsdc, bidMakerYes: bidYes, bidMakerUsdc: bidUsdc,
+        cranker: admin.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+
+    const bidUsdcAfter = Number((await getAccount(provider.connection, bidUsdc)).amount);
+    const askUsdcAfter = Number((await getAccount(provider.connection, askUsdc)).amount);
+    const bidYesAfter = Number((await getAccount(provider.connection, bidYes)).amount);
+    const escrowAfter = Number((await getAccount(provider.connection, usdcEscrow)).amount);
+
+    // ask maker (seller) is the older order → fill price = ask price = $0.40.
+    // 5 Yes × $0.40 = $2.00 to the ask maker.
+    expect(askUsdcAfter - askUsdcBefore).toBe(2_000_000);
+    // bid maker receives 5 Yes.
+    expect(bidYesAfter - bidYesBefore).toBe(5);
+    // The bidder over-escrowed $3.00 but the fill cost only $2.00; refund $1.00.
+    expect(bidUsdcAfter - bidUsdcBefore).toBe(1_000_000);
+    // Whole escrow released — should net to zero on this leg (both orders
+    // fully filled, no remaining escrow).
+    expect(escrowBefore - escrowAfter).toBe(3_000_000);
+
+    // Book is fully drained.
+    const book = await program.account.orderBook.fetch(orderBookPda);
+    expect(book.asksLen).toBe(0);
+    // The cancel_order test's bid is still in book → bidsLen should be 1.
+    expect(book.bidsLen).toBe(1);
   });
 
   it("cancel_order refunds USDC", async () => {
