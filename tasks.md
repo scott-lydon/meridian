@@ -126,6 +126,16 @@ Slice 10 — Polish and defense docs
 
 ---
 
+## Hardening backlog (discovered post-slice-launch)
+
+These are not part of the slice 1-10 PRD sequence; they are correctness or robustness gaps surfaced by Vouch or by user investigation that should be fixed before any mainnet pass.
+
+- [ ] T-H.1: On-chain expiry enforcement | hardening | program | `place_order`, `mint_pair`, `buy_no`, `sell_no`, and `match_orders` reject with `MarketExpired { now, expiry_unix }` when `Clock::get()?.unix_timestamp >= market.expiry_unix`. Today the gate is UX-only — the trade page and architecture page both explicitly call this out, but a determined wallet bypassing the UI could still submit those instructions between 16:00 and 16:05 ET. Done when the property test in `tests/program/expiry.rs` proves the rejection on each of the five instructions and the architecture page Step 3 copy can be tightened to "the program rejects."
+- [ ] T-H.2: Settle-cron health surfaced on /audit | hardening | automation | `useAutomationHealth` rendering on `app/src/app/audit/page.tsx` exposes `lastSettlementRun.error` and `lastMorningRun.error` when set. The boot-time catch-up landed in `automation/src/index.ts` (commit 53c8f86) and CORS landed in this pass; this task is the UI surface that uses those fields to show "automation healthy" vs "morning cron erroring 6h ago".
+- [ ] T-H.3: Off-hours markets-page banner copy review | hardening | frontend | the `before-open`, `after-close`, and `weekend` copy in `app/src/lib/marketSession.ts` was written for the v1 schedule. Revisit when the schedule changes (multi-day markets, futures, etc.) so the copy keeps matching what the cron actually does.
+
+---
+
 ## Done definition
 
 A slice is done when:
