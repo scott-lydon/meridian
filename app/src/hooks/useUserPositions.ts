@@ -136,14 +136,27 @@ export function useUserPositions() {
         if (quote.bestBidUsdcMicros !== undefined || quote.bestAskUsdcMicros !== undefined) {
           enriched.quote = quote;
         }
+        // Mark-to-market math:
+        //   Pair invariant: Yes + No = $1 always (per the PRD's vault rules).
+        //   So a balanced position of min(yes, no) pairs is worth EXACTLY $1
+        //   per pair regardless of mid. The remaining unbalanced tokens need
+        //   the mid-price to be valued. If we don't have mid for the unbalanced
+        //   remainder, we leave the markValue as just the pair component
+        //   (better than reporting $0 just because the book is empty).
+        const pairs = yes < no ? yes : no;
+        const yesExcess = yes - pairs;
+        const noExcess = no - pairs;
+        const pairValue = pairs * USDC_ONE_DOLLAR_MICROS;
         if (quote.midUsdcMicros !== undefined) {
-          // Yes pays $1 if Yes wins, No pays $1 if Yes loses. Mid is the
-          // implied probability of Yes winning. So Yes value ≈ mid × qty,
-          // No value ≈ (1 - mid) × qty.
-          const yesValue = (yes * quote.midUsdcMicros) / 1n; // qty is integer
-          const noValue = no * (USDC_ONE_DOLLAR_MICROS - quote.midUsdcMicros);
-          enriched.markValueUsdcMicros = yesValue + noValue;
+          // Have a mid — value the excess tokens at probability.
+          const excessYesValue = yesExcess * quote.midUsdcMicros;
+          const excessNoValue = noExcess * (USDC_ONE_DOLLAR_MICROS - quote.midUsdcMicros);
+          enriched.markValueUsdcMicros = pairValue + excessYesValue + excessNoValue;
+        } else if (pairs > 0n) {
+          // No mid available, but the pair component is exact regardless.
+          enriched.markValueUsdcMicros = pairValue;
         }
+        // (If pairs === 0n AND no mid, markValue is left undefined — we genuinely don't know.)
         result.push(enriched);
       }
       return result;

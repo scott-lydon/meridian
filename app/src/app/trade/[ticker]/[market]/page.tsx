@@ -172,6 +172,45 @@ export default function TradePage({
         </div>
       </header>
 
+      {/* Tx success / failure toast — prominent at top so users don't miss it.
+          Dismissable; auto-clears 12s after the most recent change via the
+          useEffect on lastSig/lastErr below. */}
+      {(lastSig || lastErr) && (
+        <div className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-accent/60 bg-accent/15 p-4">
+          {lastSig && (
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-xl text-yes">✓</span>
+              <div>
+                <p className="font-semibold text-text">Transaction confirmed</p>
+                <p className="text-xs text-muted">
+                  <a className="text-accent underline" href={explorerTx(lastSig)} target="_blank" rel="noreferrer">
+                    View on Solana Explorer →
+                  </a>
+                  <span className="ml-2 font-mono">{lastSig.slice(0, 10)}…{lastSig.slice(-6)}</span>
+                </p>
+              </div>
+            </div>
+          )}
+          {lastErr && (
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-xl text-no">!</span>
+              <div>
+                <p className="font-semibold text-no">Transaction failed</p>
+                <p className="break-words text-xs text-no/80">{lastErr}</p>
+              </div>
+            </div>
+          )}
+          <button
+            onClick={() => { setLastSig(null); setLastErr(null); }}
+            className="rounded p-1 text-muted hover:bg-panel hover:text-text"
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Payoff display (PRD §Key UI Elements) */}
       {m && m.outcome === "Pending" && (
         <section className="mb-6 rounded-2xl border border-accent/40 bg-accent/10 p-4 text-sm">
@@ -228,12 +267,28 @@ export default function TradePage({
                   <p className="text-sm text-muted">No bids.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
-                    {book.bids.slice(0, 10).map((b) => (
-                      <li key={`${b.owner}-${b.sequence}`} className="flex justify-between">
-                        <span className="text-yes">{formatUsdc(b.priceUsd)}</span>
-                        <span className="text-muted">{b.qty.toString()}</span>
-                      </li>
-                    ))}
+                    {book.bids.slice(0, 10).map((b) => {
+                      const mine = !!publicKey && b.owner === publicKey.toBase58();
+                      return (
+                        <li key={`${b.owner}-${b.sequence}`} className="flex items-center justify-between gap-2">
+                          <span className={mine ? "text-yes font-semibold" : "text-yes"}>
+                            {formatUsdc(b.priceUsd)}
+                            {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
+                          </span>
+                          <span className="text-muted">{b.qty.toString()}</span>
+                          {mine && (
+                            <button
+                              disabled={busy !== null}
+                              onClick={() => run("Cancel bid", () => trade.cancelOrder("bid", b.sequence))}
+                              className="rounded bg-no/20 px-2 py-0.5 text-[10px] text-no hover:bg-no/30 disabled:opacity-40"
+                              title="Cancel this bid and reclaim escrowed USDC"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -243,12 +298,28 @@ export default function TradePage({
                   <p className="text-sm text-muted">No asks.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
-                    {book.asks.slice(0, 10).map((a) => (
-                      <li key={`${a.owner}-${a.sequence}`} className="flex justify-between">
-                        <span className="text-no">{formatUsdc(a.priceUsd)}</span>
-                        <span className="text-muted">{a.qty.toString()}</span>
-                      </li>
-                    ))}
+                    {book.asks.slice(0, 10).map((a) => {
+                      const mine = !!publicKey && a.owner === publicKey.toBase58();
+                      return (
+                        <li key={`${a.owner}-${a.sequence}`} className="flex items-center justify-between gap-2">
+                          <span className={mine ? "text-no font-semibold" : "text-no"}>
+                            {formatUsdc(a.priceUsd)}
+                            {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
+                          </span>
+                          <span className="text-muted">{a.qty.toString()}</span>
+                          {mine && (
+                            <button
+                              disabled={busy !== null}
+                              onClick={() => run("Cancel ask", () => trade.cancelOrder("ask", a.sequence))}
+                              className="rounded bg-no/20 px-2 py-0.5 text-[10px] text-no hover:bg-no/30 disabled:opacity-40"
+                              title="Cancel this ask and reclaim escrowed Yes tokens"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </div>
@@ -356,19 +427,7 @@ export default function TradePage({
             {busy === "Mint Pair" ? "..." : `Mint ${qty} pair (deposit $${qty}.00 USDC)`}
           </button>
 
-          {lastSig && (
-            <p className="mt-4 break-words text-xs text-muted">
-              ✓ tx:{" "}
-              <a className="text-accent" href={explorerTx(lastSig)} target="_blank" rel="noreferrer">
-                {lastSig.slice(0, 10)}…{lastSig.slice(-6)}
-              </a>
-            </p>
-          )}
-          {lastErr && (
-            <p className="mt-4 break-words rounded border border-no/40 bg-no/10 p-2 text-xs text-no">
-              {lastErr}
-            </p>
-          )}
+          {/* lastSig + lastErr now render in the prominent top-of-page toast. */}
         </div>
       </section>
 

@@ -265,5 +265,36 @@ export function useTrade(marketPubkey: string | undefined) {
     [program, publicKey, marketPubkey, ensureAtas, sendTransaction, provider.connection],
   );
 
-  return { buyYes, sellYes, buyNo, sellNo, mintPair, ready: !!publicKey && !!marketPubkey };
+  // cancel_order(side, sequence) — caller passes the order's side ("Bid" or "Ask")
+  // and the on-chain sequence number from the order book row. Refunds escrowed
+  // USDC (for bids) or Yes tokens (for asks) back to the user's ATA.
+  const cancelOrder = useCallback(
+    async (side: "bid" | "ask", sequence: bigint): Promise<string> => {
+      if (!publicKey || !marketPubkey) throw new Error("wallet or market missing");
+      const addrs = deriveMarketAddresses(program.programId, new PublicKey(marketPubkey));
+      const { atas, createIxs } = await ensureAtas(addrs);
+      const sideArg = side === "bid" ? { bid: {} } : { ask: {} };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ix = await (program.methods as any)
+        .cancelOrder(sideArg, new BN(sequence.toString()))
+        .accounts({
+          config: PublicKey.findProgramAddressSync([Buffer.from("config"), Buffer.from([1])], program.programId)[0],
+          market: addrs.market,
+          orderBook: addrs.orderBook,
+          bookAuthority: addrs.bookAuthority,
+          usdcEscrow: addrs.usdcEscrow,
+          yesEscrow: addrs.yesEscrow,
+          userUsdc: atas.userUsdc,
+          userYes: atas.userYes,
+          user: publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction();
+      const tx = new anchor.web3.Transaction().add(...createIxs, ix);
+      return await sendTransaction(tx, provider.connection);
+    },
+    [program, publicKey, marketPubkey, ensureAtas, sendTransaction, provider.connection],
+  );
+
+  return { buyYes, sellYes, buyNo, sellNo, mintPair, cancelOrder, ready: !!publicKey && !!marketPubkey };
 }

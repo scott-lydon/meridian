@@ -19,7 +19,9 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useUserPositions, totalsFor } from "@/hooks/useUserPositions";
+import { useUserOpenOrders } from "@/hooks/useUserOpenOrders";
 import { useRedeem } from "@/hooks/useRedeem";
+import { useCancelOrder } from "@/hooks/useCancelOrder";
 import { formatUsdc, usdcFromBase } from "@/lib/usdc";
 
 export const dynamic = "force-dynamic";
@@ -36,11 +38,29 @@ function fmtMicros(micros: bigint | undefined): string {
 export default function PortfolioPage() {
   const { publicKey } = useWallet();
   const positions = useUserPositions();
+  const openOrders = useUserOpenOrders();
   const redeem = useRedeem();
+  const cancelOrder = useCancelOrder();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [lastSig, setLastSig] = useState<string | null>(null);
   const [lastErr, setLastErr] = useState<string | null>(null);
+
+  async function doCancel(marketPk: string, side: "bid" | "ask", sequence: bigint, label: string) {
+    setBusy(label);
+    setLastErr(null);
+    setLastSig(null);
+    try {
+      const sig = await cancelOrder(marketPk, side, sequence);
+      setLastSig(sig);
+      void queryClient.invalidateQueries({ queryKey: ["user-open-orders"] });
+      void queryClient.invalidateQueries({ queryKey: ["user-positions"] });
+    } catch (e) {
+      setLastErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function doRedeem(marketPk: string, side: "yes" | "no", qty: bigint, label: string) {
     setBusy(label);
@@ -144,6 +164,77 @@ export default function PortfolioPage() {
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      {/* Open orders — resting bids and asks across all markets. Surfaces
+          escrowed USDC / Yes tokens that the active-positions table misses. */}
+      <section className="mb-10">
+        <h2 className="mb-3 text-xl font-semibold">Open orders</h2>
+        <div className="rounded-2xl border border-panel bg-panel/40 p-5">
+          {openOrders.isLoading && <p className="text-sm text-muted">Loading open orders…</p>}
+          {!openOrders.isLoading && (openOrders.data?.length ?? 0) === 0 && (
+            <p className="text-sm text-muted">No resting orders.</p>
+          )}
+          {(openOrders.data?.length ?? 0) > 0 && (
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wider text-muted">
+                <tr>
+                  <th className="pb-2">Ticker</th>
+                  <th className="pb-2">Strike</th>
+                  <th className="pb-2">Side</th>
+                  <th className="pb-2 text-right">Price</th>
+                  <th className="pb-2 text-right">Qty</th>
+                  <th className="pb-2 text-right">Escrow</th>
+                  <th className="pb-2">Action</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono">
+                {openOrders.data!.map((o) => {
+                  // Escrow size: bids escrow USDC (qty × price); asks escrow Yes tokens (qty).
+                  const escrowLabel =
+                    o.side === "bid"
+                      ? formatUsdc(usdcFromBase(o.qty * BigInt(o.priceTicks) * 10_000n))
+                      : `${o.qty.toString()} Yes`;
+                  return (
+                    <tr key={`${o.market.pubkey}-${o.side}-${o.sequence}`} className="border-t border-panel/50">
+                      <td className="py-2">
+                        <Link className="text-accent" href={`/trade/${o.market.ticker}/${o.market.pubkey}`}>
+                          {o.market.ticker}
+                        </Link>
+                      </td>
+                      <td className="py-2">{formatUsdc(o.market.strikeUsd)}</td>
+                      <td className="py-2">
+                        <span className={o.side === "bid" ? "text-yes" : "text-no"}>
+                          {o.side === "bid" ? "Buy Yes (bid)" : "Sell Yes (ask)"}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right">{formatUsdc(o.priceUsd)}</td>
+                      <td className="py-2 text-right">{o.qty.toString()}</td>
+                      <td className="py-2 text-right text-muted">{escrowLabel}</td>
+                      <td className="py-2">
+                        <button
+                          disabled={busy !== null}
+                          onClick={() =>
+                            doCancel(
+                              o.market.pubkey,
+                              o.side,
+                              o.sequence,
+                              `Cancel ${o.side} ${o.market.ticker} #${o.sequence}`,
+                            )
+                          }
+                          className="rounded bg-no/20 px-3 py-1 text-xs font-semibold text-no hover:bg-no/30 disabled:opacity-40"
+                          title="Cancel this order and reclaim the escrowed funds"
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}
