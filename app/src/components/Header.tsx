@@ -10,6 +10,7 @@ const nav = [
   { href: "/portfolio", label: "Portfolio" },
   { href: "/history", label: "History" },
   { href: "/audit", label: "Audit" },
+  { href: "/architecture", label: "Architecture" },
 ];
 
 export function Header() {
