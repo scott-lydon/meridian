@@ -68,11 +68,20 @@ const DISCRIMINATORS: Record<string, string> = {
 };
 
 // Minimal base58 decoder (avoids pulling in bs58 just for 8-byte decoding).
+//
+// IMPORTANT — bug history: the accumulator MUST start as `[]`, not `[0]`.
+// Caught by qa-adversary property test on 2026-05-21 with counterexample
+// `Uint8Array.from([0])`: an `[0]` init silently adds one extra leading zero
+// byte to every decoded result. For non-leading-zero inputs the artifact
+// gets shifted into a real byte position and works by accident; for inputs
+// that decode to bytes starting with 0x00 (≈1/256 of Anchor tx data), the
+// extra byte makes `bytes.slice(0, 8)` read the wrong discriminator and the
+// instruction label silently falls through to "meridian:unknown".
 const B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 function bs58decode(s: string): Uint8Array {
   const map: Record<string, number> = {};
   for (let i = 0; i < B58_ALPHABET.length; i++) map[B58_ALPHABET[i]!] = i;
-  const bytes: number[] = [0];
+  const bytes: number[] = [];
   for (const c of s) {
     const v = map[c];
     if (v === undefined) throw new Error(`invalid base58 char: ${c}`);
