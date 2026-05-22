@@ -154,9 +154,38 @@ function maybeRunCatchupJobs(): void {
 }
 maybeRunCatchupJobs();
 
+// CORS headers applied to PUBLIC, read-only endpoints (currently just /health).
+// WHY: the audit page in the Next.js frontend fetches /health from the browser
+// to display the cron lastRun / nextRun on a single dashboard. Without these
+// headers the browser blocks the cross-origin request and surfaces
+// `TypeError: Failed to fetch`, which a user reasonably reads as "the service
+// is down" when it is actually running fine (Render's own server-to-server
+// health probe is unaffected). Allow-Origin: * is acceptable here because
+// /health exposes no per-user data — only public cron state and the public
+// Solana cluster id. Admin endpoints like /trigger/morning intentionally do
+// NOT get these headers, so a malicious page cannot CSRF the cranker.
+const PUBLIC_CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, OPTIONS",
+  "access-control-allow-headers": "content-type",
+  "access-control-max-age": "600",
+} as const;
+
 const server = http.createServer((req, res) => {
+  // CORS preflight for /health. Modern browsers only preflight when the
+  // request is non-simple (custom headers, credentialed, etc.); a plain GET
+  // does not preflight. We still handle OPTIONS so a future change that adds
+  // a header to the hook does not silently fail.
+  if (req.method === "OPTIONS" && req.url === "/health") {
+    res.writeHead(204, PUBLIC_CORS_HEADERS);
+    res.end();
+    return;
+  }
   if (req.url === "/health") {
-    res.writeHead(200, { "content-type": "application/json" });
+    res.writeHead(200, {
+      "content-type": "application/json",
+      ...PUBLIC_CORS_HEADERS,
+    });
     res.end(
       JSON.stringify({
         status: "ok",
