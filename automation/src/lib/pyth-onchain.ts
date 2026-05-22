@@ -11,6 +11,7 @@ import * as anchor from "@coral-xyz/anchor";
 import type { PublicKey } from "@solana/web3.js";
 
 import type { AnchorContext } from "./anchor.js";
+import { configPda } from "./anchor.js";
 import { logger } from "./logger.js";
 
 export interface SettleResult {
@@ -56,11 +57,18 @@ export async function settleMarketWithPyth(
           `getPriceUpdateAccount returned null/undefined`,
       );
     }
+    // WTF heads-up: the `config` account MUST be the Config PDA derived from
+    // [b"config", PROGRAM_VERSION] under our own programId — NOT the program id
+    // itself. Passing the program id (executable account) makes Anchor's
+    // discriminator / seed constraints reject the tx, which is exactly how
+    // every Pyth-driven settle in production was failing. See
+    // programs/meridian/src/instructions/settle_market.rs SettleMarket accounts
+    // struct: `seeds = [CONFIG_SEED, &[PROGRAM_VERSION]]`.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ix = await (ctx.program.methods as any)
       .settleMarket()
       .accounts({
-        config: ctx.programId,
+        config: configPda(ctx.programId),
         market: marketPubkey,
         priceUpdate: priceUpdateAccount,
         cranker: ctx.automationKeypair.publicKey,
