@@ -92,6 +92,17 @@ pub struct MatchOrders<'info> {
 }
 
 pub fn handler(ctx: Context<MatchOrders>) -> Result<()> {
+    // Once the market settles, Yes is worth exactly $1.00 or $0.00. Letting
+    // stale resting orders keep crossing at $0.50 (or any pre-settle price)
+    // hands free arbitrage to whoever runs the cranker next: match an old
+    // ask at 50, redeem the Yes for 100, pocket the spread at the ask
+    // maker's expense. Cancel still works post-settle (see cancel_order.rs)
+    // so makers retain the ability to pull their escrow back.
+    require!(
+        !ctx.accounts.market.outcome.is_settled(),
+        MeridianError::MarketAlreadySettled
+    );
+
     let market_key = ctx.accounts.market.key();
     let book_auth_bump = ctx.bumps.book_authority;
 
