@@ -9,6 +9,10 @@
 
 import * as anchor from "@coral-xyz/anchor";
 
+// Anchor 0.31 ESM/CJS interop: `anchor.BN` is undefined under `import * as`;
+// fall through to the default export which has BN attached.
+const BN = anchor.BN ?? (anchor as unknown as { default: { BN: typeof anchor.BN } }).default.BN;
+
 import type { Env } from "../lib/env.js";
 import { logger } from "../lib/logger.js";
 import { PythClient, type PythTicker } from "../lib/pyth.js";
@@ -105,7 +109,7 @@ export async function runSettlementJob(env: Env): Promise<SettlementResult> {
       const closeMicros = BigInt(Math.round(offchain.price * Number(USDC_BASE)));
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sig = await (ctx.program.methods as any)
-        .adminSettle(new anchor.BN(closeMicros.toString()))
+        .adminSettle(new BN(closeMicros.toString()))
         .accounts({
           config: configPda(ctx.programId),
           market: m.publicKey,

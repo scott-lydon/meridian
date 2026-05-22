@@ -7,6 +7,11 @@
 // 4. Log result table; alert on any failure.
 
 import * as anchor from "@coral-xyz/anchor";
+
+// Anchor 0.31 ESM/CJS interop: `anchor.BN` is undefined under `import * as`;
+// fall through to the default export which has BN attached.
+const BN = anchor.BN ?? (anchor as unknown as { default: { BN: typeof anchor.BN } }).default.BN;
+
 import { SystemProgram, SYSVAR_RENT_PUBKEY, PublicKey } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -102,10 +107,10 @@ export async function runMorningJob(env: Env): Promise<MorningResult> {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (ctx.program.methods as any)
           .createStrikeMarket(
-            new anchor.BN(day),
+            new BN(day),
             Array.from(pad6(ticker)),
-            new anchor.BN(s.strikeUsdMicros.toString()),
-            new anchor.BN(expiry),
+            new BN(s.strikeUsdMicros.toString()),
+            new BN(expiry),
             feedId,
           )
           .accounts({

@@ -67,19 +67,30 @@ export function buildAnchor(env: Env): AnchorContext {
   );
   const adminKeypair = loadKeypair("admin", env.ADMIN_KEYPAIR_JSON, env.ADMIN_KEYPAIR_PATH);
 
+  // Signer that handles BOTH legacy Transaction (partialSign) and
+  // VersionedTransaction (sign([signers])). The previous implementation
+  // assumed legacy-only and crashed with `t.partialSign is not a function`
+  // when Anchor 0.31 started building VersionedTransactions in some paths.
+  // Detect by feature and call the right method.
+  const signOne = (tx: anchor.web3.Transaction | anchor.web3.VersionedTransaction) => {
+    // VersionedTransaction has `version` and `sign([])`; Transaction has `partialSign`.
+    if ("version" in tx && typeof (tx as anchor.web3.VersionedTransaction).sign === "function") {
+      (tx as anchor.web3.VersionedTransaction).sign([automationKeypair]);
+    } else if (typeof (tx as anchor.web3.Transaction).partialSign === "function") {
+      (tx as anchor.web3.Transaction).partialSign(automationKeypair);
+    } else {
+      throw new Error("Unknown transaction shape — neither partialSign nor sign present");
+    }
+    return tx;
+  };
+
   const wallet: anchor.Wallet = {
     publicKey: automationKeypair.publicKey,
     payer: automationKeypair,
-    signTransaction: async (tx) => {
-      // @ts-expect-error v1 vs vt signing
-      tx.partialSign(automationKeypair);
-      return tx;
-    },
-    signAllTransactions: async (txs) => {
-      // @ts-expect-error v1 vs vt signing
-      txs.forEach((t) => t.partialSign(automationKeypair));
-      return txs;
-    },
+    // @ts-expect-error Anchor's union of TX types vs our explicit detection
+    signTransaction: async (tx) => signOne(tx),
+    // @ts-expect-error Anchor's union of TX types vs our explicit detection
+    signAllTransactions: async (txs) => txs.map(signOne),
   };
 
   const provider = new anchor.AnchorProvider(connection, wallet, {
