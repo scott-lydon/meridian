@@ -2,24 +2,32 @@
 
 // NetworkBadge — the cluster pill in the header.
 //
-// Was originally a plain <span> with a tooltip naming the RPC URL. That
-// looked like a button to anyone who didn't already know better; users on
-// the wrong wallet network would click it expecting a network switch and
-// get nothing. Per the no-silent-click policy (BUG_PREVENTION.md I1 /
-// constitution.md §2.15), an interactive-looking element that doesn't
-// react is a bug.
+// Clicking it opens a popover with click-by-click instructions for
+// switching the user's wallet to devnet (or whichever cluster the site is
+// currently on). The DEVNET / TESTNET / MAINNET label still indicates what
+// the SITE is on; the popover explains how to make the WALLET match.
 //
-// Now: clicking the badge opens a popover with click-by-click instructions
-// for switching Phantom and Solflare to devnet (or whichever cluster the
-// site is currently on), plus the canonical docs link for each wallet.
-// The DEVNET / TESTNET / MAINNET label still indicates what the SITE is
-// on; the popover explains how to make the WALLET match it.
+// Design choices the user pushed for (2026-05-22):
+//   1. Detect the browser ONCE and only show that browser's "find the
+//      extension" instruction. No more "Chrome / Brave / Edge" shrug
+//      mixed into a single bullet.
+//   2. Show ONE wallet's steps at a time, behind a two-tab toggle. The
+//      Solflare/Phantom dual-render was wall-of-text and the user
+//      couldn't tell which steps applied to them.
+//   3. No "Works in: Chrome / Brave / Firefox / Edge" badge row. The
+//      browser-specific instructions already encode that information;
+//      the badge row was redundant noise.
+//   4. All icons inlined as data URLs — no cdn.simpleicons.org. Safari
+//      was silently dropping the CDN images on Strict tracking-prevention.
+//   5. Phantom panel embeds an annotated SVG of the popup so the user
+//      sees a picture of where the account avatar is, not just words.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cluster } from "@/lib/cluster";
 import {
   BROWSER_ICONS,
+  PHANTOM_AVATAR_DIAGRAM,
   PHANTOM_ICON_DATA_URL,
   SOLFLARE_ICON_DATA_URL,
 } from "@/lib/walletIcons";
@@ -33,75 +41,10 @@ import {
 
 const PHANTOM_HELP_URL = "https://help.phantom.com/hc/en-us/articles/4406393831187-How-do-I-change-my-network";
 const SOLFLARE_HELP_URL = "https://docs.solflare.com/solflare/account-management/changing-networks";
+const PHANTOM_DOWNLOAD_URL = "https://phantom.com/download";
+const SOLFLARE_DOWNLOAD_URL = "https://solflare.com/download";
 
-// Visual chip used both in the wallet section headers (24px) and in the
-// "Works in:" browser-compat row (16px). Memorialized as a tiny inline
-// component because the alt-text / decorative-image rule shows up four
-// times in this file and inlining would obscure intent.
-function IconChip({
-  src,
-  alt,
-  size,
-  label,
-}: {
-  src: string;
-  alt: string;
-  size: number;
-  label?: string;
-}) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <img
-        src={src}
-        alt={alt}
-        width={size}
-        height={size}
-        className="flex-shrink-0 rounded-sm"
-      />
-      {label ? <span className="text-[10px] text-muted">{label}</span> : null}
-    </span>
-  );
-}
-
-function BrowserCompatRow({ detected }: { detected: DetectedBrowser }) {
-  // Highlight the detected browser; dim the others so the user instantly
-  // sees "yes, my browser works." Unknown / Safari both fall through to a
-  // dim row with no highlight.
-  const rows: { key: keyof typeof BROWSER_ICONS; match: DetectedBrowser }[] = [
-    { key: "Chrome", match: "chrome" },
-    { key: "Brave", match: "brave" },
-    { key: "Firefox", match: "firefox" },
-    { key: "Edge", match: "edge" },
-  ];
-  return (
-    <div className="mt-2 flex items-center gap-3 text-[10px] text-muted">
-      <span className="uppercase tracking-wider">Works in:</span>
-      {rows.map(({ key, match }) => {
-        const isMe = detected === match;
-        return (
-          <span
-            key={key}
-            className={
-              isMe
-                ? "inline-flex items-center gap-1.5 rounded-full border border-yes/40 bg-yes/10 px-1.5 py-0.5 text-yes"
-                : "inline-flex items-center gap-1.5 opacity-60"
-            }
-          >
-            <img
-              src={BROWSER_ICONS[key]}
-              alt={key}
-              width={14}
-              height={14}
-              className="flex-shrink-0"
-            />
-            <span className="text-[10px]">{key}</span>
-            {isMe ? <span className="text-[10px] font-semibold">← you</span> : null}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
+type WalletChoice = "solflare" | "phantom";
 
 function clusterCopy(name: string): { label: string; tone: "neutral" | "warn"; intro: string } {
   switch (name) {
@@ -138,19 +81,188 @@ function clusterCopy(name: string): { label: string; tone: "neutral" | "warn"; i
   }
 }
 
+/**
+ * Small detected-browser pill rendered at the top of the popover so the
+ * user can see at a glance "we know you're on Chrome — these steps are for
+ * Chrome." If detection is unknown we hide it; if Safari we still show it
+ * (the unsupported banner gives the actual hard-stop message).
+ */
+function DetectedBrowserPill({ browser }: { browser: DetectedBrowser }) {
+  if (browser === "unknown") return null;
+  const name = browserDisplayName(browser);
+  // Capitalize first letter for icon key lookup (Chrome, Brave, etc.).
+  const iconKey = (name.charAt(0).toUpperCase() + name.slice(1)) as keyof typeof BROWSER_ICONS;
+  const icon = BROWSER_ICONS[iconKey];
+  if (!icon) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-panel bg-panel/60 px-2 py-0.5 text-[10px] text-muted">
+      <img src={icon} alt="" width={12} height={12} className="flex-shrink-0" />
+      <span>
+        Showing steps for <span className="font-semibold text-text">{name}</span>
+      </span>
+    </span>
+  );
+}
+
+function SolflareSteps({ browser }: { browser: DetectedBrowser }) {
+  // Solflare panel — the recommended path for first-time users. Solflare
+  // offers in-flow wallet creation, so a brand-new user can finish the
+  // entire connect flow without ever opening the extension popup
+  // separately. The site's Select Wallet → Solflare popup carries them
+  // through seed-phrase generation, network selection, and connection.
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-yes/30 bg-yes/5 p-2.5 text-[11px] text-text">
+        <span className="font-semibold text-yes">First time? Use this.</span> Solflare lets you
+        create a wallet AS PART OF the connect flow. No separate setup. Pick &quot;Create new
+        wallet&quot; when the Solflare popup opens.
+      </div>
+      <ol className="list-decimal space-y-2 pl-5 text-xs text-text">
+        <li>
+          <span className="font-semibold">Install Solflare</span> if you haven&apos;t already:{" "}
+          <a
+            href={SOLFLARE_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-accent underline"
+          >
+            solflare.com/download
+          </a>
+          . Then reload this page so the site can detect it.
+        </li>
+        <li>
+          <span className="font-semibold">Open Solflare from your toolbar.</span>{" "}
+          <span className="text-muted">{findExtensionInstructions(browser, "Solflare")}</span>
+        </li>
+        <li>
+          <span className="font-semibold">Create or import your wallet</span> from the popup
+          wizard. Save the seed phrase on paper — never screenshot, never paste into cloud notes.
+        </li>
+        <li>
+          In the open Solflare popup, click the <span className="font-semibold">three-dot menu</span>{" "}
+          (top-right corner of the popup).
+        </li>
+        <li>
+          Open <span className="font-semibold">Settings</span> →{" "}
+          <span className="font-semibold">Manage Networks</span> → pick{" "}
+          <span className="font-semibold">Devnet</span>.
+        </li>
+        <li>
+          Come back to this tab and click <span className="font-semibold">Select Wallet</span> →{" "}
+          Solflare. Approve in the popup.
+        </li>
+      </ol>
+      <a
+        href={SOLFLARE_HELP_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block text-xs text-accent underline"
+      >
+        Solflare docs: changing networks →
+      </a>
+    </div>
+  );
+}
+
+function PhantomSteps({ browser }: { browser: DetectedBrowser }) {
+  // Phantom panel — for users who already have a Phantom wallet, or who
+  // specifically want to use Phantom. Phantom requires a pre-created
+  // wallet inside the extension BEFORE the site's Select Wallet → Phantom
+  // flow will work. Without that, Phantom returns "Unexpected error" with
+  // no popup and the user has no idea why.
+  //
+  // The avatar location matters because the user told us they "tried a
+  // bunch of things and still can't figure out how to get the testnet
+  // thing going on." The inline diagram below makes "click the colored
+  // circle in the top-left of the popup" visually obvious.
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-no/40 bg-no/10 p-2.5 text-[11px] text-text">
+        <span className="font-semibold text-no">Heads-up:</span> Phantom needs an existing wallet
+        BEFORE you can connect. The site can&apos;t see an extension with zero wallets — Phantom
+        returns &quot;Unexpected error&quot; with no popup. If you&apos;re brand new, switch to
+        the Solflare tab above.
+      </div>
+      <ol className="list-decimal space-y-2 pl-5 text-xs text-text">
+        <li>
+          <span className="font-semibold">Install Phantom</span> if you haven&apos;t:{" "}
+          <a
+            href={PHANTOM_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-accent underline"
+          >
+            phantom.com/download
+          </a>
+          .
+        </li>
+        <li>
+          <span className="font-semibold">Open Phantom from your toolbar.</span>{" "}
+          <span className="text-muted">{findExtensionInstructions(browser, "Phantom")}</span>
+        </li>
+        <li>
+          If you don&apos;t already have a Phantom wallet:{" "}
+          <span className="font-semibold">create or import one now</span>. Save the seed phrase on
+          paper.
+        </li>
+        <li>
+          In the open Phantom popup, click your{" "}
+          <span className="font-semibold">account avatar</span> — the colored circle in the{" "}
+          <span className="font-semibold">top-left corner</span> of the popup. See diagram below.
+        </li>
+        <li>
+          <div className="my-1.5 inline-block rounded-lg border border-panel bg-bg/60 p-2">
+            <div
+              className="w-[160px]"
+              // Inline SVG diagram of where the avatar sits in the popup.
+              // dangerouslySetInnerHTML is safe here: the source string is
+              // a hard-coded constant in walletIcons.ts, no user input.
+              dangerouslySetInnerHTML={{ __html: PHANTOM_AVATAR_DIAGRAM }}
+            />
+          </div>
+        </li>
+        <li>
+          A side panel slides in. Click <span className="font-semibold">Settings</span>.
+        </li>
+        <li>
+          Scroll to <span className="font-semibold">Developer Settings</span> → toggle{" "}
+          <span className="font-semibold">Testnet Mode</span> ON.
+        </li>
+        <li>
+          Under the Solana row, pick <span className="font-semibold">Devnet</span>. Important:
+          Solana <em>Testnet</em> is a DIFFERENT network — Meridian uses Solana <em>Devnet</em>.
+        </li>
+        <li>
+          Close the side panel, come back to this tab, click{" "}
+          <span className="font-semibold">Select Wallet</span> → Phantom. Approve in the popup.
+        </li>
+      </ol>
+      <a
+        href={PHANTOM_HELP_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block text-xs text-accent underline"
+      >
+        Phantom docs: changing your network →
+      </a>
+    </div>
+  );
+}
+
 export function NetworkBadge() {
   const [open, setOpen] = useState(false);
+  // Default to Solflare — the strictly-easier first-time path.
+  const [choice, setChoice] = useState<WalletChoice>("solflare");
   const containerRef = useRef<HTMLDivElement>(null);
   const copy = clusterCopy(cluster.name);
   // useMemo so the result is stable for the lifetime of the component.
-  // detectBrowser is sync + idempotent; no harm in calling on every render
-  // but the memo makes the dependency intent clear.
+  // detectBrowser is sync + idempotent; memo makes the dependency intent clear.
   const browser = useMemo(() => detectBrowser(), []);
   const browserSupported = isWalletSupportedBrowser(browser);
 
   // Outside-click + Esc close. Without this the popover sticks around when
-  // the user clicks anywhere else, which is bad UX and a state-leak waiting
-  // to confuse the next interaction.
+  // the user clicks anywhere else, which is a state-leak waiting to confuse
+  // the next interaction.
   useEffect(() => {
     if (!open) return;
     function onDocClick(e: MouseEvent) {
@@ -192,16 +304,15 @@ export function NetworkBadge() {
         <div
           role="dialog"
           aria-label="Wallet network switch instructions"
-          // Absolutely-positioned popover. Right-anchored so it doesn't fall
-          // off the screen on narrow viewports. Max-w-sm keeps the line
-          // length readable. z-30 stays under the WalletErrorBanner (z-50)
-          // but above page content.
           className="absolute right-0 z-30 mt-2 w-[min(28rem,calc(100vw-3rem))] rounded-2xl border border-panel bg-bg/95 p-5 text-sm shadow-2xl backdrop-blur-md"
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <p className="font-semibold text-text">Wallet must also be on {copy.label}</p>
               <p className="mt-1 text-xs text-muted">{copy.intro}</p>
+              <div className="mt-2">
+                <DetectedBrowserPill browser={browser} />
+              </div>
             </div>
             <button
               onClick={() => setOpen(false)}
@@ -225,135 +336,79 @@ export function NetworkBadge() {
             </div>
           )}
 
-          <div className="space-y-4">
-            {/*
-              Solflare goes FIRST — it offers a one-flow setup where you can
-              create a wallet AS PART OF the connect handshake. Phantom
-              requires you to create a wallet inside the extension BEFORE
-              clicking Select Wallet (extension treats itself as a manager,
-              site as a client). For a first-time user the Solflare path is
-              strictly easier; for an existing wallet user either works.
-              All extension-finding instructions are browser-specific via
-              findExtensionInstructions(detectBrowser(), name) — Chrome/Brave/
-              Edge use the puzzle-piece pattern; Firefox uses the toolbar
-              directly; Safari renders an unsupported-browser banner above.
-            */}
-            <div className="rounded-lg border border-yes/40 bg-yes/5 p-3">
-              <div className="mb-2 flex items-center gap-2">
+          {/*
+            Tab toggle. Aria-current marks the active panel for screen
+            readers. Buttons (not links) because they don't change URL.
+          */}
+          <div
+            role="tablist"
+            aria-label="Choose which wallet you want to set up"
+            className="mb-3 flex gap-2 rounded-lg border border-panel bg-panel/30 p-1"
+          >
+            <button
+              role="tab"
+              aria-selected={choice === "solflare"}
+              onClick={() => setChoice("solflare")}
+              className={
+                choice === "solflare"
+                  ? "flex-1 rounded-md bg-yes/15 px-2 py-1.5 text-xs font-semibold text-yes"
+                  : "flex-1 rounded-md px-2 py-1.5 text-xs text-muted hover:text-text"
+              }
+            >
+              <span className="inline-flex items-center gap-1.5">
                 <img
                   src={SOLFLARE_ICON_DATA_URL}
-                  alt="Solflare logo"
-                  width={24}
-                  height={24}
-                  className="rounded-md"
+                  alt=""
+                  width={14}
+                  height={14}
+                  className="rounded-sm"
                 />
-                <p className="text-xs font-semibold uppercase tracking-wider text-yes">
-                  Solflare
-                </p>
-                <span className="rounded-full border border-yes/40 bg-yes/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-yes">
-                  Easiest for new users
-                </span>
-              </div>
-              <p className="mb-2 text-xs text-muted">
-                Solflare lets you create a wallet AS PART OF the connect flow. Click Select
-                Wallet → Solflare and follow the popup&apos;s setup wizard; the connection
-                lands when the wizard finishes. No pre-setup required.
-              </p>
-              <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
-                <li>
-                  <span className="font-semibold">Open the Solflare extension.</span>{" "}
-                  <span className="text-muted">{findExtensionInstructions(browser, "Solflare")}</span>
-                </li>
-                <li>If it&apos;s your first time, create or import a wallet from the wizard. Save the seed phrase on paper — never screenshot, never paste into cloud notes.</li>
-                <li>Inside the open Solflare popup, click the <span className="font-semibold">three-dot menu</span> in the top-right corner.</li>
-                <li>Open <span className="font-semibold">Settings</span> → <span className="font-semibold">Manage Networks</span> → pick <span className="font-semibold">Devnet</span>.</li>
-                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> → Solflare.</li>
-              </ol>
-              <a
-                href={SOLFLARE_HELP_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-block text-xs text-accent underline"
-              >
-                Solflare docs: changing networks →
-              </a>
-              <BrowserCompatRow detected={browser} />
-            </div>
-
-            <div className="rounded-lg border border-panel bg-panel/40 p-3">
-              <div className="mb-2 flex items-center gap-2">
+                Solflare
+                {choice === "solflare" && (
+                  <span className="rounded-full border border-yes/40 bg-yes/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider">
+                    Easiest
+                  </span>
+                )}
+              </span>
+            </button>
+            <button
+              role="tab"
+              aria-selected={choice === "phantom"}
+              onClick={() => setChoice("phantom")}
+              className={
+                choice === "phantom"
+                  ? "flex-1 rounded-md bg-accent/15 px-2 py-1.5 text-xs font-semibold text-accent"
+                  : "flex-1 rounded-md px-2 py-1.5 text-xs text-muted hover:text-text"
+              }
+            >
+              <span className="inline-flex items-center gap-1.5">
                 <img
                   src={PHANTOM_ICON_DATA_URL}
-                  alt="Phantom logo"
-                  width={24}
-                  height={24}
-                  className="rounded-md"
+                  alt=""
+                  width={14}
+                  height={14}
+                  className="rounded-sm"
                 />
-                <p className="text-xs font-semibold uppercase tracking-wider text-accent">
-                  Phantom
-                </p>
-                <span className="rounded-full border border-no/40 bg-no/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-no">
-                  Requires pre-setup
-                </span>
-              </div>
-              <p className="mb-2 text-xs text-muted">
-                Phantom does NOT offer in-flow wallet creation. You must create a wallet inside
-                the extension BEFORE returning to this site. If you click Select Wallet → Phantom
-                without an existing wallet, Phantom returns &quot;Unexpected error&quot; with no
-                popup. Use Solflare above if you want a one-step flow.
-              </p>
-              {/*
-                Phantom devnet steps for the CURRENT Phantom UI (verified against
-                Phantom's own docs and recent third-party walkthroughs 2026-05-22).
-                The previously-shipped "gear icon bottom-right" step was for an
-                older Phantom build that was retired. Now it's the account avatar
-                in the TOP-LEFT of the popup, which opens a side panel containing
-                Settings → Developer Settings → Testnet Mode.
-              */}
-              <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
-                <li>
-                  <span className="font-semibold">Open the Phantom extension.</span>{" "}
-                  <span className="text-muted">{findExtensionInstructions(browser, "Phantom")}</span>
-                </li>
-                <li>
-                  <span className="font-semibold text-no">FIRST-TIME USERS:</span> the popup shows
-                  &quot;Create a new wallet&quot; or &quot;Import an existing wallet.&quot; You MUST
-                  finish this step inside the extension. The site can&apos;t see an extension with
-                  zero wallets. Save the seed phrase on paper, never screenshot.
-                </li>
-                <li>
-                  In the open Phantom popup, click the{" "}
-                  <span className="font-semibold">account avatar</span> (the colored circle in the{" "}
-                  <span className="font-semibold">top-left corner</span>). A side panel slides in.
-                </li>
-                <li>Click <span className="font-semibold">Settings</span> in the side panel.</li>
-                <li>Scroll down and tap <span className="font-semibold">Developer Settings</span>.</li>
-                <li>Toggle <span className="font-semibold">Testnet Mode</span> ON. A network list appears.</li>
-                <li>
-                  Make sure <span className="font-semibold">Solana Devnet</span> is checked. Important:
-                  Solana <em>Testnet</em> is a DIFFERENT network — Meridian uses Solana <em>Devnet</em>.
-                </li>
-                <li>Close the side panel and come back to this tab; click <span className="font-semibold">Select Wallet</span> → Phantom.</li>
-              </ol>
-              <a
-                href={PHANTOM_HELP_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-block text-xs text-accent underline"
-              >
-                Phantom docs: changing your network →
-              </a>
-              <BrowserCompatRow detected={browser} />
-            </div>
-
-            <p className="text-xs text-muted">
-              This site&apos;s RPC URL is{" "}
-              <code className="rounded bg-panel/60 px-1 py-0.5 font-mono text-[10px] text-text">
-                {cluster.rpcUrl}
-              </code>
-              . Your wallet&apos;s RPC must point at the same cluster (the host can differ).
-            </p>
+                Phantom
+              </span>
+            </button>
           </div>
+
+          <div role="tabpanel">
+            {choice === "solflare" ? (
+              <SolflareSteps browser={browser} />
+            ) : (
+              <PhantomSteps browser={browser} />
+            )}
+          </div>
+
+          <p className="mt-4 border-t border-panel pt-3 text-xs text-muted">
+            This site&apos;s RPC URL is{" "}
+            <code className="rounded bg-panel/60 px-1 py-0.5 font-mono text-[10px] text-text">
+              {cluster.rpcUrl}
+            </code>
+            . Your wallet&apos;s RPC must point at the same cluster (the host can differ).
+          </p>
         </div>
       )}
     </div>
