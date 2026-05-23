@@ -277,11 +277,39 @@ function Eli7Card({ emoji, title, children }: { emoji: string; title: string; ch
 // tracking-prevention. mermaid.initialize is called with securityLevel:
 // "loose" elsewhere in this file, which is what permits <img> in node
 // labels in the first place.
+// Topology grouping rationale (read before editing):
+//
+//   The Solana program IS the backend; Render hosts two off-chain clients.
+//   The diagram makes this explicit by putting the Next.js UI inside a
+//   "User's browser" subgraph (where it actually runs at runtime, even
+//   though it's served from Render) and labeling the Solana subgraph as
+//   the decentralized backend. The wallet node shows BOTH Phantom and
+//   Solflare icons because the WalletProvider uses Wallet Standard
+//   auto-discovery (empty `wallets` array), so any Wallet-Standard wallet
+//   appears in the modal automatically — Phantom is not special.
+//
+//   The previous version of this diagram labeled the wallet alone as
+//   "Client" and stuck Next.js in an "Off-chain" subgraph next to the
+//   keeper, which made it look like (a) Phantom IS the product and
+//   (b) the UI talks through the keeper to reach Solana. Both wrong.
+//   The UI talks to Solana directly via RPC + WS; it does NOT route
+//   through the keeper. The only UI→keeper edge in the system is the
+//   /audit page polling the keeper's /health endpoint, which is cosmetic
+//   and intentionally not in this diagram.
 const TOPOLOGY_MERMAID = `flowchart LR
-  subgraph Client["Client"]
-    Wallet["<img src='${techIconUrl("phantom")}' width='18'/> Phantom wallet"]
+  subgraph Browser["User's browser"]
+    direction TB
+    Wallet["<img src='${techIconUrl("phantom")}' width='16'/> <img src='${techIconUrl("solflare")}' width='16'/> Phantom / Solflare<br/>(Wallet Standard)"]
+    UI["<img src='${techIconUrl("nextdotjs")}' width='18'/> Next.js 14 UI<br/>(served from Render)"]
+    Wallet -->|sign tx| UI
   end
-  subgraph Solana["Solana devnet"]
+  subgraph Off["Off-chain keeper"]
+    Automation["<img src='${techIconUrl("nodedotjs")}' width='18'/> Automation service<br/>(Render, admin keypair)"]
+  end
+  subgraph Oracle["Price oracle"]
+    Pyth["<img src='${techIconUrl("pyth")}' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
+  end
+  subgraph Solana["Solana devnet (decentralized backend)"]
     direction TB
     Program["<img src='${techIconUrl("rust")}' width='18'/> Meridian program<br/>(Anchor 0.31.1)"]
     Config["Config PDA"]
@@ -290,17 +318,7 @@ const TOPOLOGY_MERMAID = `flowchart LR
     Vault["USDC vault"]
     Mints["Yes/No mints"]
   end
-  subgraph Off["Off-chain"]
-    direction TB
-    Frontend["<img src='${techIconUrl("nextdotjs")}' width='18'/> Next.js 14<br/>(Render)"]
-    Automation["<img src='${techIconUrl("nodedotjs")}' width='18'/> Automation<br/>(Render)"]
-  end
-  subgraph Oracle["Oracle"]
-    Pyth["<img src='${techIconUrl("pyth")}' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
-  end
-  Wallet -->|sign tx| Frontend
-  Frontend -->|RPC| Program
-  Frontend -.->|WS subscribe| Book
+  UI -->|RPC + WS| Program
   Automation -->|cron 08:00 ET<br/>create markets| Program
   Automation -->|cron 16:05 ET<br/>settle| Program
   Pyth -.->|prev close| Automation
@@ -316,8 +334,12 @@ function TopologySection() {
     <section id="topology" className="mb-16">
       <h2 className="mb-2 text-3xl font-bold">Topology</h2>
       <p className="mb-6 max-w-3xl text-muted">
-        Three deployable artifacts. Anchor program on Solana devnet. Next.js frontend on Render.
-        Node automation on Render. Pyth is read-only.
+        The backend is a Solana program. The two boxes labeled <em>Render</em> are off-chain
+        clients, not the source of truth. The Next.js UI runs inside the user&apos;s browser
+        (it&apos;s only <em>served</em> from Render). The keeper bot runs as a long-lived
+        daemon and holds the admin keypair. Both talk to Solana directly, not to each other.
+        The wallet is multi-provider: Phantom, Solflare, or any Wallet-Standard wallet shows
+        up in the connect modal automatically.
       </p>
       <div className="rounded-2xl border border-panel bg-panel/40 p-6">
         <pre className="mermaid text-sm">{TOPOLOGY_MERMAID}</pre>

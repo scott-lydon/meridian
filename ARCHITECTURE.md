@@ -4,56 +4,78 @@ Authoritative architecture document. Mirrors [`plan.md`](./plan.md) decisions; t
 
 ## Topology
 
+The backend is a Solana program (Anchor 0.31.1) deployed on Solana devnet.
+Two off-chain Render services support it: a Next.js UI (the product surface)
+and a Node automation keeper. Both are clients of the program; neither holds
+business logic or user funds. The UI talks to Solana directly; it does NOT
+route through the keeper. Phantom or Solflare (any Wallet Standard wallet)
+signs transactions inside the user's browser.
+
 ```
-              ┌────────────────────────────┐
-              │  User wallet (Phantom)     │
-              │  non-custodial             │
-              └──────────────┬─────────────┘
-                             │ signed tx
-┌────────────────────────────▼─────────────────────────────┐
-│              Solana devnet (validators)                  │
-│                                                          │
-│  ┌──────────────────────────────────────────────────┐    │
-│  │  Meridian Anchor program (Rust, anchor 0.31.1)   │    │
-│  │  Instructions:                                   │    │
-│  │   - initialize_config                            │    │
-│  │   - create_strike_market                         │    │
-│  │   - mint_pair       — N USDC → N Yes + N No      │    │
-│  │   - place_order     — escrow + insert            │    │
-│  │   - cancel_order    — refund escrow              │    │
-│  │   - settle_market_manual (dev/test)              │    │
-│  │   - admin_settle    — time-delayed override      │    │
-│  │   - redeem          — burn token → USDC          │    │
-│  │   - pause / unpause                              │    │
-│  └──────────────────────────────────────────────────┘    │
-│                                                          │
-│  Config PDA · Market PDA · Vault ATA · Yes/No mint PDAs  │
-│  OrderBook PDA (zero-copy, 64-deep slabs per side)       │
-│  USDC + Yes escrow ATAs                                  │
-└──────────────────────────────────────────────────────────┘
-        ▲                                  ▲
-        │ getAccount / WS                  │ submit + sign
-        │                                  │
-┌───────┴────────────┐         ┌───────────┴──────────────┐
-│  Next.js frontend  │         │  Automation service       │
-│  (Vercel)          │         │  (Render, Node 20)        │
-│  - Landing         │         │  - Morning cron (08:00 ET)│
-│  - /markets        │         │  - Settlement (16:05 ET)  │
-│  - /trade/...      │         │  - Slack alerter          │
-│  - /portfolio      │         │  - /health endpoint       │
-│  - /history        │         └───────────────────────────┘
-│  - Wallet adapter  │
-│  - TanStack Query  │
-│  - Zustand UI      │
-└────────────────────┘
-        ▲
-        │
-┌───────┴────────────────────┐
-│  Pyth Network Hermes       │
-│  Equity feeds for MAG7     │
-│  Off-chain pull            │
+┌─────────────────────── User's browser ─────────────────────────┐
+│                                                                │
+│   ┌──────────────────────────┐    ┌──────────────────────────┐ │
+│   │ Phantom or Solflare      │ ──►│ Next.js 14 UI            │ │
+│   │ (Wallet Standard)        │ ⏎ sign tx                     │ │
+│   │ non-custodial            │    │ served from Render        │ │
+│   └──────────────────────────┘    │ - landing                 │ │
+│                                   │ - /markets, /trade        │ │
+│                                   │ - /portfolio, /history    │ │
+│                                   │ - wallet adapter          │ │
+│                                   │ - TanStack Query          │ │
+│                                   └────────────┬──────────────┘ │
+└────────────────────────────────────────────────┼────────────────┘
+                                                 │ RPC + WS
+                                                 ▼
+┌──────────────── Solana devnet (decentralized backend) ─────────┐
+│                                                                │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │ Meridian Anchor program (Rust, anchor 0.31.1)            │  │
+│  │ ERtAbZetHFVmFKyTzfJd9LdMGsqu5b2TWeWc65sikPaX             │  │
+│  │ Instructions: initialize_config, create_strike_market,   │  │
+│  │ mint_pair, place_order, cancel_order, settle_market_*,   │  │
+│  │ admin_settle, redeem, pause, unpause                     │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  Config PDA · Market PDA · Vault ATA · Yes/No mint PDAs        │
+│  OrderBook PDA (zero-copy, 64-deep slabs per side)             │
+│  USDC + Yes escrow ATAs                                        │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+        ▲                                          ▲
+        │ cron 08:00 ET create_strike_market       │ on-chain verify
+        │ cron 16:05 ET admin_settle               │ (slice 2)
+        │                                          │
+┌───────┴────────────────────┐         ┌───────────┴────────────┐
+│ Automation keeper          │         │ Pyth Hermes            │
+│ Node 20 + croner on Render │◄────────┤ MAG7 equity feeds      │
+│ holds admin keypair        │  prev   │ off-chain pull         │
+│ /health endpoint           │  close  └────────────────────────┘
+│ Slack alerter              │
 └────────────────────────────┘
 ```
+
+**Notes on the topology:**
+
+- The Next.js UI is *not* the backend. It is a Solana client that runs in the
+  user's browser. It is *served from* Render but it *talks to* Solana RPC
+  directly. If the Render UI service died, anyone with their own client could
+  still trade against the program.
+- The automation keeper is also a Solana client. It owns the admin keypair
+  and runs scheduled jobs (create markets at 08:00 ET, settle at 16:05 ET),
+  but it is not on the user-trade path. If the keeper died, existing
+  positions would be unaffected. New market creation and automatic
+  settlement would pause until the keeper recovered.
+- The on-chain program is the only source of truth for markets, order books,
+  positions, and USDC custody. It is decentralized in the sense that it
+  executes on the Solana validator network. We retain the upgrade authority
+  (we have not transferred or burned it), so the program is *not* upgrade-
+  immutable. Mainnet promotion would burn the upgrade authority.
+- Wallet support is multi-provider via the Solana Wallet Standard. Phantom,
+  Solflare, and Backpack all register themselves and appear in the connect
+  modal automatically. The wallet adapter is configured with an empty
+  `wallets` array on purpose. See
+  [`app/src/components/WalletProvider.tsx`](./app/src/components/WalletProvider.tsx).
 
 ## Components
 
@@ -83,7 +105,7 @@ Capacity 64 per side: keeps the OrderBook under Solana's 10KB CPI-create-account
 
 ### Frontend (`app/`)
 
-Next.js 14 App Router on Vercel. Pages:
+Next.js 14 App Router served from Render (the `meridian-app` service in `render.yaml`); the page code itself runs inside the user's browser. Pages:
 
 - `/` — landing
 - `/markets` — grid of MAG7 cards with each ticker's active strikes (reads every Market via `program.account.market.all()`)
@@ -171,13 +193,13 @@ Mirrors [`plan.md`](./plan.md) §4 verbatim. Single source of truth for the webs
 | 5 | USDC | Circle devnet mint | Custom stable | Real mint matches mainnet semantics. |
 | 6 | Token standard | SPL Token | Token-2022 | No transfer-hook need in v1. |
 | 7 | Wallet adapter | `@solana/wallet-adapter` | Single-wallet | Standard, supports Phantom + Solflare + Backpack. |
-| 8 | Frontend | Next.js 14 App Router | Vite + React Router | SSR for landing; client for rest; Vercel ergonomics. |
+| 8 | Frontend | Next.js 14 App Router on Render | Vite + React Router | SSR for landing; client for trading. One Render platform for both services. |
 | 9 | Server state | TanStack Query | Apollo / SWR | Best cache-invalidation primitives for chain reads. |
 | 10 | Client state | Zustand | Redux / Jotai | Existing standard from boxy-fractions; selectors must not allocate. |
 | 11 | Real-time | RPC WS onAccountChange | Polling only | Sub-second finality means polling misses fills. |
 | 12 | Automation runtime | Node 20 + croner | Lambda / Workers | Long-running process is right for cron + future cranker. |
 | 13 | Logging | pino (JSON) | Winston / console | Fastest Node logger, JSON output for Render. |
-| 14 | Hosting | Vercel + Render | Render-only / Cloudflare | Vercel is the Next.js reference; Render fits Node crons. |
+| 14 | Hosting | Render for both services | Vercel + Render / Cloudflare | One platform keeps deploy contracts, env-var management, and on-call surface consistent. |
 | 15 | Pre-commit | prek | Husky / lefthook | Project standard. |
 | 16 | Tests | anchor test + proptest + vitest | jest / mocha | proptest for invariants; vitest is fast and ESM-native. |
 

@@ -81,15 +81,24 @@
   <section id="topology" class="mx-auto max-w-6xl px-6 py-12">
     <h2 class="mb-2 text-3xl font-bold">Topology</h2>
     <p class="mb-6 max-w-3xl text-slate-400">
-      Three deployable artifacts. Anchor program on Solana devnet. Next.js frontend on Vercel. Node automation on Render. Pyth is read-only.
+      The backend is a Solana program. The two boxes labeled "Render" are off-chain clients, not the source of truth. The Next.js UI runs in the user's browser; the keeper bot runs as a daemon. Both talk to Solana directly, not to each other.
     </p>
     <div class="panel p-6">
       <pre class="mermaid">
 flowchart LR
-  subgraph Client["Client"]
-    Wallet["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='18'/> Phantom wallet"]
+  subgraph Browser["User's browser"]
+    direction TB
+    Wallet["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='16'/> <img src='https://cdn.simpleicons.org/solflare/FC8D1B' width='16'/> Phantom / Solflare<br/>(Wallet Standard)"]
+    UI["<img src='https://cdn.simpleicons.org/nextdotjs/ffffff' width='18'/> Next.js 14 UI<br/>(served from Render)"]
+    Wallet -->|sign tx| UI
   end
-  subgraph Solana["Solana devnet"]
+  subgraph Off["Off-chain keeper"]
+    Automation["<img src='https://cdn.simpleicons.org/nodedotjs/339933' width='18'/> Automation service<br/>(Render, admin keypair)"]
+  end
+  subgraph Oracle["Price oracle"]
+    Pyth["<img src='https://cdn.simpleicons.org/pyth/4ec9b0' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
+  end
+  subgraph Solana["Solana devnet (decentralized backend)"]
     direction TB
     Program["<img src='https://cdn.simpleicons.org/rust/c1763a' width='18'/> Meridian program<br/>(Anchor 0.31.1)"]
     Config["Config PDA"]
@@ -98,17 +107,7 @@ flowchart LR
     Vault["USDC vault"]
     Mints["Yes/No mints"]
   end
-  subgraph Off["Off-chain"]
-    direction TB
-    Frontend["<img src='https://cdn.simpleicons.org/nextdotjs/ffffff' width='18'/> Next.js 14<br/>(Vercel)"]
-    Automation["<img src='https://cdn.simpleicons.org/nodedotjs/339933' width='18'/> Automation<br/>(Render)"]
-  end
-  subgraph Oracle["Oracle"]
-    Pyth["<img src='https://cdn.simpleicons.org/pyth/4ec9b0' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
-  end
-  Wallet -->|sign tx| Frontend
-  Frontend -->|RPC| Program
-  Frontend -.->|WS subscribe| Book
+  UI -->|RPC + WS| Program
   Automation -->|cron 08:00 ET<br/>create markets| Program
   Automation -->|cron 16:05 ET<br/>settle| Program
   Pyth -.->|prev close| Automation
@@ -145,7 +144,7 @@ flowchart LR
       </div>
       <div class="panel p-6">
         <div class="mb-2 flex items-center gap-2"><img src="https://cdn.simpleicons.org/nextdotjs/ffffff" width="20" alt="" /><h3 class="text-xl font-semibold">Frontend (Next.js)</h3></div>
-        <p class="text-sm text-slate-300">App Router on Vercel. Pages: landing, markets grid, trade page with order book, portfolio, history. TanStack Query for chain reads, Zustand for UI, wallet adapter for Phantom + Solflare. Branded UsdcBase bigint type for money.</p>
+        <p class="text-sm text-slate-300">App Router on Render. Pages: landing, markets grid, trade page with order book, portfolio, history. TanStack Query for chain reads, Zustand for UI, wallet adapter for Phantom and Solflare (Wallet Standard auto-discovery). Branded UsdcBase bigint type for money.</p>
         <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
           <div><div class="text-yes font-semibold mb-1">Pros</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>SSR landing, client trading</li><li>Type-safe Anchor client from IDL</li><li>Sub-2s order book polling</li></ul></div>
           <div><div class="text-no font-semibold mb-1">Cons</div><ul class="list-disc list-inside text-slate-400 space-y-1"><li>Buffer/Node polyfill weight</li><li>Wallet adapter UX is opinionated</li></ul></div>
@@ -218,7 +217,7 @@ sequenceDiagram
           <tr class="border-t border-slate-800"><td class="px-4 py-3">USDC</td><td class="px-4 py-3 font-semibold">Circle devnet mint</td><td class="px-4 py-3 text-slate-500">Custom stable</td><td class="px-4 py-3">Real mint mirrors mainnet semantics.</td></tr>
           <tr class="border-t border-slate-800"><td class="px-4 py-3">Token</td><td class="px-4 py-3 font-semibold">SPL Token</td><td class="px-4 py-3 text-slate-500">Token-2022</td><td class="px-4 py-3">No transfer hooks needed in v1.</td></tr>
           <tr class="border-t border-slate-800"><td class="px-4 py-3">Wallet</td><td class="px-4 py-3 font-semibold">solana/wallet-adapter</td><td class="px-4 py-3 text-slate-500">Single integration</td><td class="px-4 py-3">Standard; Phantom + Solflare + Backpack.</td></tr>
-          <tr class="border-t border-slate-800"><td class="px-4 py-3">Frontend</td><td class="px-4 py-3 font-semibold">Next.js 14 App Router</td><td class="px-4 py-3 text-slate-500">Vite + RR</td><td class="px-4 py-3">SSR landing, client rest, Vercel ergonomics.</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Frontend</td><td class="px-4 py-3 font-semibold">Next.js 14 App Router on Render</td><td class="px-4 py-3 text-slate-500">Vite + React Router</td><td class="px-4 py-3">SSR landing, client trading. One platform for both Render services.</td></tr>
           <tr class="border-t border-slate-800"><td class="px-4 py-3">Server state</td><td class="px-4 py-3 font-semibold">TanStack Query</td><td class="px-4 py-3 text-slate-500">Apollo / SWR</td><td class="px-4 py-3">Best cache invalidation by key.</td></tr>
           <tr class="border-t border-slate-800"><td class="px-4 py-3">UI state</td><td class="px-4 py-3 font-semibold">Zustand</td><td class="px-4 py-3 text-slate-500">Redux / Jotai</td><td class="px-4 py-3">No allocation in selectors (boxy lesson).</td></tr>
           <tr class="border-t border-slate-800"><td class="px-4 py-3">Automation</td><td class="px-4 py-3 font-semibold">Node + croner</td><td class="px-4 py-3 text-slate-500">Lambda / Workers</td><td class="px-4 py-3">Long-running process for cron + crank.</td></tr>
@@ -269,8 +268,9 @@ sequenceDiagram
       <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/pyth/4ec9b0" width="20" alt="" /><span class="text-sm">Pyth Network</span></div>
       <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/pnpm/F69220" width="20" alt="" /><span class="text-sm">pnpm</span></div>
       <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/vitest/729b1b" width="20" alt="" /><span class="text-sm">vitest</span></div>
-      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/vercel/ffffff" width="20" alt="" /><span class="text-sm">Vercel</span></div>
-      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/render/46e3b7" width="20" alt="" /><span class="text-sm">Render</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/render/46e3b7" width="20" alt="" /><span class="text-sm">Render (UI + keeper)</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/phantom/AB9FF2" width="20" alt="" /><span class="text-sm">Phantom</span></div>
+      <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/solflare/FC8D1B" width="20" alt="" /><span class="text-sm">Solflare</span></div>
       <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/github/ffffff" width="20" alt="" /><span class="text-sm">GitHub</span></div>
       <div class="panel-2 flex items-center gap-2 px-3 py-2"><img src="https://cdn.simpleicons.org/gitlab/fc6d26" width="20" alt="" /><span class="text-sm">GitLab</span></div>
     </div>
