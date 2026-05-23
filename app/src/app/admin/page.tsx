@@ -98,7 +98,7 @@ export default function AdminPage() {
               onChange={(e) => setUsername(e.target.value)}
               required
               className="w-full rounded-lg border border-panel bg-bg px-3 py-2 font-mono text-sm text-text focus:border-accent focus:outline-none"
-              placeholder="admin"
+              placeholder="username"
             />
           </label>
           <label className="mb-4 block text-sm">
@@ -112,7 +112,7 @@ export default function AdminPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               className="w-full rounded-lg border border-panel bg-bg px-3 py-2 font-mono text-sm text-text focus:border-accent focus:outline-none"
-              placeholder="pass"
+              placeholder="password"
             />
           </label>
           {error && (
