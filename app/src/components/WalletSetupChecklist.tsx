@@ -136,6 +136,20 @@ export function WalletSetupChecklist({
       <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-text">
         What&apos;s required (any one wallet works — not just Phantom)
       </p>
+      {/*
+        First-time-user tip. Phantom returns "Unexpected error" with no popup
+        if the extension has no wallet — its design treats extension as a
+        manager, sites as clients. Solflare offers in-flow creation. For a
+        first-time user the Solflare path is strictly easier.
+      */}
+      <p className="mb-3 rounded-md border border-yes/30 bg-yes/5 p-2 text-[11px] text-text">
+        <span className="font-semibold text-yes">First time here?</span> Use{" "}
+        <span className="font-semibold">Solflare</span>. It lets you create a wallet AS PART OF
+        the connect popup (one flow). <span className="font-semibold">Phantom</span> requires
+        you to create a wallet inside the extension FIRST — if you click Select Wallet →
+        Phantom without an existing wallet, Phantom returns &quot;Unexpected error&quot; with
+        no popup. The DEVNET pill in the header has full instructions for both.
+      </p>
       <ol className="space-y-1.5">
         <CheckRow ok={anyInstalled}>
           <span>

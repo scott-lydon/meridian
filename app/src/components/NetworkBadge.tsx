@@ -174,6 +174,58 @@ export function NetworkBadge() {
           </div>
 
           <div className="space-y-4">
+            {/*
+              Solflare goes FIRST — it offers a one-flow setup where you can
+              create a wallet AS PART OF the connect handshake. Phantom
+              requires you to create a wallet inside the extension BEFORE
+              clicking Select Wallet (extension treats itself as a manager,
+              site as a client). For a first-time user the Solflare path is
+              strictly easier; for an existing wallet user either works.
+            */}
+            <div className="rounded-lg border border-yes/40 bg-yes/5 p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <img
+                  src={SOLFLARE_ICON_DATA_URL}
+                  alt="Solflare logo"
+                  width={24}
+                  height={24}
+                  className="rounded-md"
+                />
+                <p className="text-xs font-semibold uppercase tracking-wider text-yes">
+                  Solflare
+                </p>
+                <span className="rounded-full border border-yes/40 bg-yes/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-yes">
+                  Easiest for new users
+                </span>
+              </div>
+              <p className="mb-2 text-xs text-muted">
+                Solflare lets you create a wallet AS PART OF the connect flow. Click Select
+                Wallet → Solflare and follow the popup&apos;s setup wizard; the connection
+                lands when the wizard finishes. No pre-setup required.
+              </p>
+              <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
+                <li>
+                  Open the Solflare extension (yellow icon shown above). Don&apos;t see it in your
+                  toolbar? Click the <span className="font-semibold">puzzle-piece</span> Extensions
+                  icon (top right of Chrome / Brave / Edge), pick <span className="font-semibold">Solflare</span>,
+                  pin for next time.
+                </li>
+                <li>If it&apos;s your first time, create or import a wallet from the wizard. Save the seed phrase on paper — never screenshot, never paste into cloud notes.</li>
+                <li>Click the <span className="font-semibold">three-dot menu</span> (top right of the extension popup).</li>
+                <li>Open <span className="font-semibold">Settings</span> → <span className="font-semibold">Manage Networks</span> → pick <span className="font-semibold">Devnet</span>.</li>
+                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> → Solflare.</li>
+              </ol>
+              <a
+                href={SOLFLARE_HELP_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-block text-xs text-accent underline"
+              >
+                Solflare docs: changing networks →
+              </a>
+              <BrowserCompatRow />
+            </div>
+
             <div className="rounded-lg border border-panel bg-panel/40 p-3">
               <div className="mb-2 flex items-center gap-2">
                 <img
@@ -186,20 +238,33 @@ export function NetworkBadge() {
                 <p className="text-xs font-semibold uppercase tracking-wider text-accent">
                   Phantom
                 </p>
+                <span className="rounded-full border border-no/40 bg-no/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-no">
+                  Requires pre-setup
+                </span>
               </div>
+              <p className="mb-2 text-xs text-muted">
+                Phantom does NOT offer in-flow wallet creation. You must create a wallet inside
+                the extension BEFORE returning to this site. If you click Select Wallet → Phantom
+                without an existing wallet, Phantom returns &quot;Unexpected error&quot; with no
+                popup. Use Solflare above if you want a one-step flow.
+              </p>
               <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
                 <li>
-                  Open the Phantom extension. Look for the purple Phantom icon (shown above)
-                  in your browser toolbar. <span className="font-semibold">Don&apos;t see it?</span> Click the
-                  {" "}<span className="font-semibold">puzzle-piece</span> Extensions icon (top right of
-                  Chrome / Brave / Edge), then pick <span className="font-semibold">Phantom</span> from
-                  the list. To pin it permanently, click the pin icon next to Phantom&apos;s row.
+                  Open the Phantom extension (purple icon shown above). Don&apos;t see it in your toolbar?
+                  Click the <span className="font-semibold">puzzle-piece</span> Extensions icon (top right
+                  of Chrome / Brave / Edge), pick <span className="font-semibold">Phantom</span>, pin for next time.
+                </li>
+                <li>
+                  <span className="font-semibold text-no">FIRST-TIME USERS:</span> the popup shows
+                  &quot;Create a new wallet&quot; or &quot;Import a wallet.&quot; You MUST finish
+                  this step inside the extension. The site can&apos;t see an extension with
+                  zero wallets. Save the seed phrase on paper.
                 </li>
                 <li>Click the <span className="font-semibold">gear icon</span> (Settings, bottom right of the extension popup).</li>
                 <li>Scroll to <span className="font-semibold">Developer Settings</span> and tap it.</li>
                 <li>Turn on <span className="font-semibold">Testnet Mode</span> (toggle to ON).</li>
                 <li>Back on the main screen, tap the network name at the top (currently &quot;Mainnet&quot;) and pick <span className="font-semibold">Solana Devnet</span>.</li>
-                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> again.</li>
+                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> → Phantom.</li>
               </ol>
               <a
                 href={PHANTOM_HELP_URL}
@@ -208,44 +273,6 @@ export function NetworkBadge() {
                 className="mt-2 inline-block text-xs text-accent underline"
               >
                 Phantom docs: changing your network →
-              </a>
-              <BrowserCompatRow />
-            </div>
-
-            <div className="rounded-lg border border-panel bg-panel/40 p-3">
-              <div className="mb-2 flex items-center gap-2">
-                <img
-                  src={SOLFLARE_ICON_DATA_URL}
-                  alt="Solflare logo"
-                  width={24}
-                  height={24}
-                  className="rounded-md"
-                />
-                <p className="text-xs font-semibold uppercase tracking-wider text-accent">
-                  Solflare
-                </p>
-              </div>
-              <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
-                <li>
-                  Open the Solflare extension. Look for the yellow Solflare icon (shown
-                  above) in your browser toolbar. <span className="font-semibold">Don&apos;t see it?</span>{" "}
-                  Click the <span className="font-semibold">puzzle-piece</span> Extensions
-                  icon (top right of Chrome / Brave / Edge), then pick{" "}
-                  <span className="font-semibold">Solflare</span> from the list. Pin it for
-                  next time using the pin icon next to its row.
-                </li>
-                <li>Click the <span className="font-semibold">three-dot menu</span> (top right of the extension popup).</li>
-                <li>Open <span className="font-semibold">Settings</span> → <span className="font-semibold">Manage Networks</span>.</li>
-                <li>Pick <span className="font-semibold">Devnet</span> (or whichever cluster matches this site).</li>
-                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> again.</li>
-              </ol>
-              <a
-                href={SOLFLARE_HELP_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-2 inline-block text-xs text-accent underline"
-              >
-                Solflare docs: changing networks →
               </a>
               <BrowserCompatRow />
             </div>
