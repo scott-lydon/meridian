@@ -63,13 +63,42 @@ export default function LandingPage() {
   );
 }
 
-// Devnet onboarding helper. Surfaces the wallet-setup gotchas Meridian's
-// own tester hit while smoke-testing — Solflare's mainnet-only "active
-// wallet" scanner, Phantom defaulting to mainnet, and the faucet pipe
-// for SOL + USDC. Anyone hitting Connect Wallet without first reading
-// this would otherwise get a generic "wallet not connected" failure
-// with no idea what to do.
+// Devnet onboarding helper. Landing-page overview of the four prerequisites
+// to connect. Step 2 (switch wallet to devnet) used to inline a generic
+// "settings (gear icon)" walkthrough — but the gear is in different places
+// in Phantom vs. Solflare AND in different places across browsers, so the
+// detailed click-by-click lives in the DEVNET pill's modal (NetworkBadge)
+// where browser detection picks the right copy. Here we just point at it
+// with a button that opens the modal programmatically.
+//
+// Single source of truth for the network-switch steps: NetworkBadge.tsx.
+// Anything that needs to teach the user "how to switch your wallet to
+// devnet" must call openNetworkSwitchModal() rather than inlining steps.
 function DevnetSetupHelper() {
+  // Click handler for "Open setup instructions" — locates the DEVNET pill
+  // button in the header (it's a <button> whose textContent is the
+  // cluster label, "DEVNET" / "TESTNET" / "MAINNET") and triggers click.
+  // Failing closed: if the pill can't be found for any reason, scroll
+  // the user to the header so they can find it visually instead of a
+  // silent no-op.
+  function openNetworkSwitchModal() {
+    const pill = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (b) => b.textContent?.trim().toUpperCase() === cluster.name.toUpperCase(),
+    );
+    if (pill) {
+      pill.click();
+      pill.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      // Should not happen — NetworkBadge always renders the pill in the
+      // header. Surfacing as a console error makes the regression
+      // immediately obvious if Header.tsx changes structure.
+      console.error(
+        "DevnetSetupHelper: could not locate the network pill button in the header.",
+      );
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
   return (
     <section className="w-full rounded-2xl border border-accent/40 bg-accent/5 p-6">
       <h2 className="mb-3 text-lg font-semibold text-accent">First time? Devnet setup in 90 seconds</h2>
@@ -85,9 +114,10 @@ function DevnetSetupHelper() {
           <div>
             <p className="text-fg">
               <strong>Install a wallet extension:</strong>{" "}
-              <a className="text-accent underline" href="https://phantom.app/download" target="_blank" rel="noreferrer">Phantom</a>{" "}
-              or{" "}
-              <a className="text-accent underline" href="https://solflare.com/download" target="_blank" rel="noreferrer">Solflare</a>.
+              <a className="text-accent underline" href="https://solflare.com/download" target="_blank" rel="noreferrer">Solflare</a>{" "}
+              (easiest — in-popup wallet creation) or{" "}
+              <a className="text-accent underline" href="https://phantom.com/download" target="_blank" rel="noreferrer">Phantom</a>{" "}
+              (requires creating a wallet inside the extension first).
             </p>
             <p className="text-xs text-muted">
               Create a new wallet OR import a seed phrase. Write the seed phrase down on paper — never screenshot, never paste into cloud notes.
@@ -99,12 +129,16 @@ function DevnetSetupHelper() {
           <span className="font-mono text-accent">2.</span>
           <div>
             <p className="text-fg">
-              <strong>Switch the extension to Devnet:</strong> open the extension popup → settings (gear icon) →{" "}
-              <span className="text-accent">Network</span> → <span className="font-mono">Devnet</span>.
+              <strong>Switch the extension to Devnet.</strong> The exact clicks differ by wallet AND
+              browser, so the instructions are tailored to you.
             </p>
-            <p className="text-xs text-muted">
-              <strong>Solflare gotcha:</strong> if Solflare's import wizard says "No Active Wallets Found" with a Quick setup button — click <strong>Quick setup</strong>. It's the bypass for Solflare scanning mainnet (your wallet only has devnet funds, so mainnet shows empty). Quick setup imports account 0 anyway.
-            </p>
+            <button
+              type="button"
+              onClick={openNetworkSwitchModal}
+              className="mt-1.5 inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent hover:bg-accent/20"
+            >
+              Open click-by-click instructions →
+            </button>
           </div>
         </li>
 
@@ -131,7 +165,7 @@ function DevnetSetupHelper() {
           <span className="font-mono text-accent">4.</span>
           <div>
             <p className="text-fg">
-              <strong>Click Connect Wallet</strong> (top right). Pick your extension, approve the popup, you're in.
+              <strong>Click Select Wallet</strong> (top right). Pick your extension, approve the popup, you're in.
             </p>
             <p className="text-xs text-muted">
               The extension MUST be on devnet at connect time. If you see "wallet not connected" errors after clicking Connect, your extension is probably still on mainnet — switch it and retry.
