@@ -31,8 +31,11 @@
 
 import { useEffect, useState } from "react";
 
+import { isAdminEnabled } from "@/lib/adminMode";
+
 export const AFTER_HOURS_MODE_STORAGE_KEY = "meridian.afterHoursMode";
 const AFTER_HOURS_MODE_EVENT = "meridian:afterHoursModeChanged";
+const ADMIN_EVENT = "meridian:adminModeChanged";
 
 /**
  * Read the current flag synchronously. Returns false in SSR / Node since
@@ -89,21 +92,38 @@ export function setAfterHoursMode(enabled: boolean): void {
  * a re-render. This is the same hydration-mismatch dodge Next.js uses for
  * any client-only state.
  */
+/**
+ * React hook returning [enabled, setter].
+ *
+ * The returned `enabled` value is AND-gated with the admin flag from
+ * lib/adminMode.ts. This means a stale `meridian.afterHoursMode = "on"`
+ * value silently does nothing for visitors who haven't signed in at
+ * /admin. Consumers (trade page, markets page, banner) never need to
+ * check admin separately — the hook handles it.
+ *
+ * Subscribes to four events to stay coherent:
+ *   - same-tab afterHoursMode change (custom event)
+ *   - same-tab admin change (custom event)
+ *   - cross-tab `storage` (covers both keys)
+ *   - (no fourth — the storage event fires once per write regardless of
+ *     which of our two keys was touched, and our sync() re-reads both.)
+ */
 export function useAfterHoursMode(): [boolean, (next: boolean) => void] {
   const [enabled, setEnabled] = useState<boolean>(false);
 
   useEffect(() => {
-    // First read after mount — picks up any pre-existing localStorage value.
-    setEnabled(isAfterHoursModeEnabled());
-
     function sync() {
-      setEnabled(isAfterHoursModeEnabled());
+      // Effective = admin unlocked AND user flipped the toggle.
+      setEnabled(isAdminEnabled() && isAfterHoursModeEnabled());
     }
+    sync();
 
     window.addEventListener(AFTER_HOURS_MODE_EVENT, sync);
+    window.addEventListener(ADMIN_EVENT, sync);
     window.addEventListener("storage", sync);
     return () => {
       window.removeEventListener(AFTER_HOURS_MODE_EVENT, sync);
+      window.removeEventListener(ADMIN_EVENT, sync);
       window.removeEventListener("storage", sync);
     };
   }, []);

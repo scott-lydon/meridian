@@ -12,12 +12,19 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useAdminMode } from "@/lib/adminMode";
 import { useAfterHoursMode } from "@/lib/afterHoursMode";
 
 export function AfterHoursModeToggle() {
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useAfterHoursMode();
   const containerRef = useRef<HTMLDivElement>(null);
+  // The whole toggle is hidden on public deployments unless the visitor has
+  // signed in at /admin. SSR-safe because useAdminMode() returns false
+  // until the client effect runs. On localhost the user can still sign in
+  // once and never see the form again (localStorage persists). The gate
+  // protects the affordance, not the program — see lib/adminMode.ts.
+  const adminUnlocked = useAdminMode();
 
   // Outside-click + Esc close. Matches NetworkBadge's popover pattern so
   // the two feel like the same control style.
@@ -46,6 +53,10 @@ export function AfterHoursModeToggle() {
   const buttonClass = enabled
     ? "rounded-full border border-amber-500/50 bg-amber-500/15 px-2 py-1 text-xs font-semibold text-amber-400 hover:bg-amber-500/25"
     : "rounded-full border border-panel bg-panel/40 px-2 py-1 text-xs text-muted hover:bg-panel hover:text-text";
+
+  // Public visitors don't see this at all. They have to visit /admin and
+  // sign in first. Renders null AFTER hooks (rules of hooks compliance).
+  if (!adminUnlocked) return null;
 
   return (
     <div className="relative" ref={containerRef}>
@@ -126,7 +137,13 @@ export function AfterHoursModeToggle() {
  */
 export function AfterHoursBanner() {
   const [enabled, setEnabled] = useAfterHoursMode();
-  if (!enabled) return null;
+  const adminUnlocked = useAdminMode();
+  // Only show the banner when (a) admin has unlocked and (b) the toggle is
+  // ON. Without the admin guard, a user who flipped the toggle and then
+  // signed out would keep seeing the banner forever even though the
+  // affordance is meant to be hidden. Both flags are localStorage so this
+  // path is reachable.
+  if (!adminUnlocked || !enabled) return null;
   return (
     <div
       role="status"
