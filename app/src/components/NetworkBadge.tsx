@@ -18,9 +18,55 @@
 import { useEffect, useRef, useState } from "react";
 
 import { cluster } from "@/lib/cluster";
+import {
+  BROWSER_ICONS,
+  PHANTOM_ICON_DATA_URL,
+  SOLFLARE_ICON_DATA_URL,
+} from "@/lib/walletIcons";
 
 const PHANTOM_HELP_URL = "https://help.phantom.com/hc/en-us/articles/4406393831187-How-do-I-change-my-network";
 const SOLFLARE_HELP_URL = "https://docs.solflare.com/solflare/account-management/changing-networks";
+
+// Visual chip used both in the wallet section headers (24px) and in the
+// "Works in:" browser-compat row (16px). Memorialized as a tiny inline
+// component because the alt-text / decorative-image rule shows up four
+// times in this file and inlining would obscure intent.
+function IconChip({
+  src,
+  alt,
+  size,
+  label,
+}: {
+  src: string;
+  alt: string;
+  size: number;
+  label?: string;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <img
+        src={src}
+        alt={alt}
+        width={size}
+        height={size}
+        className="flex-shrink-0 rounded-sm"
+      />
+      {label ? <span className="text-[10px] text-muted">{label}</span> : null}
+    </span>
+  );
+}
+
+function BrowserCompatRow() {
+  return (
+    <div className="mt-2 flex items-center gap-3 text-[10px] text-muted">
+      <span className="uppercase tracking-wider">Works in:</span>
+      <IconChip src={BROWSER_ICONS.Chrome} alt="Chrome" size={16} label="Chrome" />
+      <IconChip src={BROWSER_ICONS.Brave} alt="Brave" size={16} label="Brave" />
+      <IconChip src={BROWSER_ICONS.Firefox} alt="Firefox" size={16} label="Firefox" />
+      <IconChip src={BROWSER_ICONS.Edge} alt="Edge" size={16} label="Edge" />
+    </div>
+  );
+}
 
 function clusterCopy(name: string): { label: string; tone: "neutral" | "warn"; intro: string } {
   switch (name) {
@@ -129,11 +175,26 @@ export function NetworkBadge() {
 
           <div className="space-y-4">
             <div className="rounded-lg border border-panel bg-panel/40 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-accent">
-                Phantom
-              </p>
+              <div className="mb-2 flex items-center gap-2">
+                <img
+                  src={PHANTOM_ICON_DATA_URL}
+                  alt="Phantom logo"
+                  width={24}
+                  height={24}
+                  className="rounded-md"
+                />
+                <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                  Phantom
+                </p>
+              </div>
               <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
-                <li>Click the Phantom icon in your browser toolbar to open the extension.</li>
+                <li>
+                  Open the Phantom extension. Look for the purple Phantom icon (shown above)
+                  in your browser toolbar. <span className="font-semibold">Don&apos;t see it?</span> Click the
+                  {" "}<span className="font-semibold">puzzle-piece</span> Extensions icon (top right of
+                  Chrome / Brave / Edge), then pick <span className="font-semibold">Phantom</span> from
+                  the list. To pin it permanently, click the pin icon next to Phantom&apos;s row.
+                </li>
                 <li>Click the <span className="font-semibold">gear icon</span> (Settings, bottom right of the extension popup).</li>
                 <li>Scroll to <span className="font-semibold">Developer Settings</span> and tap it.</li>
                 <li>Turn on <span className="font-semibold">Testnet Mode</span> (toggle to ON).</li>
@@ -148,14 +209,31 @@ export function NetworkBadge() {
               >
                 Phantom docs: changing your network →
               </a>
+              <BrowserCompatRow />
             </div>
 
             <div className="rounded-lg border border-panel bg-panel/40 p-3">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-accent">
-                Solflare
-              </p>
+              <div className="mb-2 flex items-center gap-2">
+                <img
+                  src={SOLFLARE_ICON_DATA_URL}
+                  alt="Solflare logo"
+                  width={24}
+                  height={24}
+                  className="rounded-md"
+                />
+                <p className="text-xs font-semibold uppercase tracking-wider text-accent">
+                  Solflare
+                </p>
+              </div>
               <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
-                <li>Click the Solflare icon in your browser toolbar.</li>
+                <li>
+                  Open the Solflare extension. Look for the yellow Solflare icon (shown
+                  above) in your browser toolbar. <span className="font-semibold">Don&apos;t see it?</span>{" "}
+                  Click the <span className="font-semibold">puzzle-piece</span> Extensions
+                  icon (top right of Chrome / Brave / Edge), then pick{" "}
+                  <span className="font-semibold">Solflare</span> from the list. Pin it for
+                  next time using the pin icon next to its row.
+                </li>
                 <li>Click the <span className="font-semibold">three-dot menu</span> (top right of the extension popup).</li>
                 <li>Open <span className="font-semibold">Settings</span> → <span className="font-semibold">Manage Networks</span>.</li>
                 <li>Pick <span className="font-semibold">Devnet</span> (or whichever cluster matches this site).</li>
@@ -169,6 +247,7 @@ export function NetworkBadge() {
               >
                 Solflare docs: changing networks →
               </a>
+              <BrowserCompatRow />
             </div>
 
             <p className="text-xs text-muted">
