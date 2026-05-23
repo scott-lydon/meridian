@@ -2,26 +2,38 @@
 
 // Wallet adapter + connection provider for the whole app.
 //
-// IMPORTANT — wallet adapter v0.15+ migration notes (root-caused 2026-05-22):
-// Phantom, Solflare, and Backpack all register themselves via the Solana
-// Wallet Standard. Passing explicit `PhantomWalletAdapter` /
-// `SolflareWalletAdapter` instances is redundant AND harmful on modern
-// Phantom builds (>= v23) because those builds removed the legacy
-// `window.solana` shim the old adapter relied on. The legacy adapter's
-// `connect()` then throws `WalletNotReadyError`, which — without an
-// onError handler — is swallowed and the click looks like a no-op.
+// IMPORTANT — wallet adapter v0.15+ migration + no-silent-click defence
+// (root-caused 2026-05-22). Three things go wrong if you do the "standard"
+// wallet-adapter setup naively, all three of which look identical to the
+// user (click Phantom, nothing happens, no error, no popup):
 //
-// Fix: pass an empty `wallets` array so the Wallet Standard discovery in
-// `@solana/wallet-adapter-react` finds the actual registered wallets, and
-// install an onError handler that surfaces failures in a visible banner.
-// See https://github.com/anza-xyz/wallet-adapter#wallet-standard for the
-// Standard discovery contract.
+//   1. Modern Phantom (>= v23) removed the legacy `window.solana` shim that
+//      the @solana/wallet-adapter-wallets `PhantomWalletAdapter` relied on.
+//      That adapter's `connect()` throws `WalletNotReadyError`. We fix this
+//      by passing an empty `wallets` array and letting the Solana Wallet
+//      Standard auto-discover the actually-registered wallets.
+//   2. The default `onError` prop is `console.error`, which is invisible
+//      to a non-developer. We install one that surfaces failures in a
+//      fixed top-of-page banner with an action-oriented sentence.
+//   3. Even with onError installed, the adapter's `connect()` can return
+//      SILENTLY in some paths — the user-gesture chain that Phantom's
+//      popup needs is lost in the autoConnect useEffect microtask, or the
+//      extension is locked and the adapter's open-extension call no-ops.
+//      No error is thrown, so onError never fires. We fix this with a
+//      WalletWatcher that surfaces a banner if a wallet was selected but
+//      neither connected nor connecting within 4 seconds.
+//
+// The combination of (2) + (3) implements the "no-silent-click" policy
+// codified in BUG_PREVENTION.md and constitution.md: every user-initiated
+// UI action must produce a visible signal — success OR failure — within
+// a few seconds, regardless of which code path the failure took.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Connection } from "@solana/web3.js";
 import {
   ConnectionProvider,
+  useWallet,
   WalletProvider as SolanaWalletProvider,
 } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
@@ -39,6 +51,8 @@ import { queryClient } from "@/lib/queryClient";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
+const WATCHER_TIMEOUT_MS = 4_000;
+
 /**
  * Map a raw `WalletError` to a short, action-oriented sentence a non-developer
  * can act on. The default `error.message` on wallet-adapter errors is too
@@ -46,7 +60,7 @@ import "@solana/wallet-adapter-react-ui/styles.css";
  */
 function describeWalletError(err: unknown): string {
   if (err instanceof WalletNotReadyError) {
-    return "Phantom (or Solflare) is not installed or not unlocked. Open the extension, unlock it, then click again. If the extension is missing, install it from phantom.com or solflare.com and reload this page.";
+    return "Phantom (or Solflare) is not installed or not unlocked. Open the extension, unlock it, then click connect again. If the extension is missing, install it from phantom.com or solflare.com and reload this page.";
   }
   if (err instanceof WalletWindowBlockedError) {
     return "The browser blocked the wallet popup. Allow popups for this site in the address bar, then click connect again.";
@@ -66,6 +80,22 @@ function describeWalletError(err: unknown): string {
   return `Unknown wallet error: ${String(err)}.`;
 }
 
+/**
+ * Defensive copy for the most-common "silent click" cause: user picked a
+ * wallet in the modal, modal closed, nothing else happened. Lists all four
+ * plausible causes ranked by frequency, each with the user-facing fix.
+ */
+function silentNoConnectMessage(walletName: string): string {
+  return (
+    `"${walletName}" was selected ${Math.round(WATCHER_TIMEOUT_MS / 1000)}s ago but never connected and didn't return an error. ` +
+    `Most likely causes, in order:\n` +
+    `  1. Extension is locked. Click the ${walletName} icon in your browser toolbar; if it asks for your password, that was the problem. Then click connect here again.\n` +
+    `  2. Wrong network. ${walletName} must be on Solana Devnet (this site is devnet — see the DEVNET badge in the header). In Phantom: Settings → Developer Settings → Testnet Mode = ON, then pick "Solana Devnet". In Solflare: Settings → Manage Networks → Devnet.\n` +
+    `  3. Popup blocked. The wallet popup needs popups allowed for this site. Look in the address bar for a popup-blocked icon; click it and allow.\n` +
+    `  4. A previous wallet popup is still open elsewhere. Check the extension icon for a notification badge — if there's a pending request, approve or dismiss it first.`
+  );
+}
+
 function WalletErrorBanner({
   message,
   onDismiss,
@@ -83,9 +113,11 @@ function WalletErrorBanner({
       className="fixed inset-x-0 top-0 z-50 border-b border-no/40 bg-no/15 px-6 py-3 text-sm text-no shadow-lg backdrop-blur-md"
     >
       <div className="mx-auto flex max-w-6xl items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="font-semibold">Wallet didn&apos;t connect.</p>
-          <p className="mt-1 text-no/90">{message}</p>
+          {/* whitespace-pre-line so newlines in silentNoConnectMessage render
+              as a real numbered list. */}
+          <p className="mt-1 whitespace-pre-line text-no/90">{message}</p>
         </div>
         <button
           onClick={onDismiss}
@@ -98,6 +130,32 @@ function WalletErrorBanner({
       </div>
     </div>
   );
+}
+
+/**
+ * Surfaces silently-failed wallet selections — the case where the user picks
+ * a wallet in the modal, the modal closes, but `connect()` returns without
+ * throwing AND without setting `connected`. Without this watcher the UI is
+ * frozen with no signal at all (the original 2026-05-22 bug).
+ *
+ * Implementation note: we live INSIDE WalletProvider's tree so `useWallet`
+ * is available. Hoisted into its own component because hooks cannot live in
+ * the parent that mounts WalletProvider.
+ */
+function WalletWatcher({ onTimeout }: { onTimeout: (message: string) => void }) {
+  const { wallet, connected, connecting, publicKey } = useWallet();
+  useEffect(() => {
+    // Only watch the dangerous state: a wallet was selected (wallet != null)
+    // but we are neither connected nor in the connecting state. Either
+    // connect() was never invoked, or it returned silently. Give it 4s.
+    if (!wallet || connected || connecting || publicKey) return;
+    const walletName = wallet.adapter.name;
+    const timerId = window.setTimeout(() => {
+      onTimeout(silentNoConnectMessage(walletName));
+    }, WATCHER_TIMEOUT_MS);
+    return () => window.clearTimeout(timerId);
+  }, [wallet, connected, connecting, publicKey, onTimeout]);
+  return null;
 }
 
 export function MeridianProviders({ children }: { readonly children: ReactNode }) {
@@ -122,10 +180,17 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
     // the on-screen banner for users. Never silently swallow — the original
     // bug (2026-05-22) was that the default onError did nothing visible and
     // clicking Phantom looked like a no-op for ~minutes before the user
-    // gave up.
+    // gave up. See WalletWatcher above for the complementary defence
+    // against silent-no-throw returns.
     // eslint-disable-next-line no-console
     console.error("[wallet-adapter] connect/select failed:", err);
     setWalletErrorMsg(describeWalletError(err));
+  }, []);
+
+  const onWalletWatcherTimeout = useCallback((message: string) => {
+    // eslint-disable-next-line no-console
+    console.warn("[wallet-adapter] silent-no-connect timeout:", message);
+    setWalletErrorMsg(message);
   }, []);
 
   return (
@@ -133,6 +198,7 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
       <ConnectionProvider endpoint={endpoint} config={connectionConfig}>
         <SolanaWalletProvider wallets={wallets} autoConnect onError={onWalletError}>
           <WalletModalProvider>
+            <WalletWatcher onTimeout={onWalletWatcherTimeout} />
             {walletErrorMsg && (
               <WalletErrorBanner
                 message={walletErrorMsg}
