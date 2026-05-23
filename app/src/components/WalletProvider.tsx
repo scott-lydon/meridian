@@ -90,7 +90,7 @@ function silentNoConnectMessage(walletName: string): string {
     `"${walletName}" was selected ${Math.round(WATCHER_TIMEOUT_MS / 1000)}s ago but never connected and didn't return an error. ` +
     `Most likely causes, in order:\n` +
     `  1. Extension is locked. Click the ${walletName} icon in your browser toolbar; if it asks for your password, that was the problem. Then click connect here again.\n` +
-    `  2. Wrong network. ${walletName} must be on Solana Devnet (this site is devnet — see the DEVNET badge in the header). In Phantom: Settings → Developer Settings → Testnet Mode = ON, then pick "Solana Devnet". In Solflare: Settings → Manage Networks → Devnet.\n` +
+    `  2. Wrong network. ${walletName} must be on Solana Devnet. CLICK THE DEVNET PILL in the header (top right) for click-by-click switch instructions for your wallet.\n` +
     `  3. Popup blocked. The wallet popup needs popups allowed for this site. Look in the address bar for a popup-blocked icon; click it and allow.\n` +
     `  4. A previous wallet popup is still open elsewhere. Check the extension icon for a notification badge — if there's a pending request, approve or dismiss it first.`
   );

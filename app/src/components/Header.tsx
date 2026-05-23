@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ConnectButton } from "@/components/ConnectButton";
-import { cluster } from "@/lib/cluster";
+import { NetworkBadge } from "@/components/NetworkBadge";
 
 const nav = [
   { href: "/", label: "Home" },
@@ -30,16 +30,7 @@ export function Header() {
           </nav>
         </div>
         <div className="flex items-center gap-3">
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs uppercase tracking-wider ${
-              cluster.name === "mainnet"
-                ? "bg-no/20 text-no"
-                : "bg-panel text-muted"
-            }`}
-            title={cluster.rpcUrl}
-          >
-            {cluster.name}
-          </span>
+          <NetworkBadge />
           <ConnectButton />
         </div>
       </div>
