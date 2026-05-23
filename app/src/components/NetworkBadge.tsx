@@ -15,7 +15,7 @@
 // The DEVNET / TESTNET / MAINNET label still indicates what the SITE is
 // on; the popover explains how to make the WALLET match it.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cluster } from "@/lib/cluster";
 import {
@@ -23,6 +23,13 @@ import {
   PHANTOM_ICON_DATA_URL,
   SOLFLARE_ICON_DATA_URL,
 } from "@/lib/walletIcons";
+import {
+  browserDisplayName,
+  detectBrowser,
+  findExtensionInstructions,
+  isWalletSupportedBrowser,
+  type DetectedBrowser,
+} from "@/lib/browser";
 
 const PHANTOM_HELP_URL = "https://help.phantom.com/hc/en-us/articles/4406393831187-How-do-I-change-my-network";
 const SOLFLARE_HELP_URL = "https://docs.solflare.com/solflare/account-management/changing-networks";
@@ -56,14 +63,42 @@ function IconChip({
   );
 }
 
-function BrowserCompatRow() {
+function BrowserCompatRow({ detected }: { detected: DetectedBrowser }) {
+  // Highlight the detected browser; dim the others so the user instantly
+  // sees "yes, my browser works." Unknown / Safari both fall through to a
+  // dim row with no highlight.
+  const rows: { key: keyof typeof BROWSER_ICONS; match: DetectedBrowser }[] = [
+    { key: "Chrome", match: "chrome" },
+    { key: "Brave", match: "brave" },
+    { key: "Firefox", match: "firefox" },
+    { key: "Edge", match: "edge" },
+  ];
   return (
     <div className="mt-2 flex items-center gap-3 text-[10px] text-muted">
       <span className="uppercase tracking-wider">Works in:</span>
-      <IconChip src={BROWSER_ICONS.Chrome} alt="Chrome" size={16} label="Chrome" />
-      <IconChip src={BROWSER_ICONS.Brave} alt="Brave" size={16} label="Brave" />
-      <IconChip src={BROWSER_ICONS.Firefox} alt="Firefox" size={16} label="Firefox" />
-      <IconChip src={BROWSER_ICONS.Edge} alt="Edge" size={16} label="Edge" />
+      {rows.map(({ key, match }) => {
+        const isMe = detected === match;
+        return (
+          <span
+            key={key}
+            className={
+              isMe
+                ? "inline-flex items-center gap-1.5 rounded-full border border-yes/40 bg-yes/10 px-1.5 py-0.5 text-yes"
+                : "inline-flex items-center gap-1.5 opacity-60"
+            }
+          >
+            <img
+              src={BROWSER_ICONS[key]}
+              alt={key}
+              width={14}
+              height={14}
+              className="flex-shrink-0"
+            />
+            <span className="text-[10px]">{key}</span>
+            {isMe ? <span className="text-[10px] font-semibold">← you</span> : null}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -107,6 +142,11 @@ export function NetworkBadge() {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const copy = clusterCopy(cluster.name);
+  // useMemo so the result is stable for the lifetime of the component.
+  // detectBrowser is sync + idempotent; no harm in calling on every render
+  // but the memo makes the dependency intent clear.
+  const browser = useMemo(() => detectBrowser(), []);
+  const browserSupported = isWalletSupportedBrowser(browser);
 
   // Outside-click + Esc close. Without this the popover sticks around when
   // the user clicks anywhere else, which is bad UX and a state-leak waiting
@@ -173,6 +213,18 @@ export function NetworkBadge() {
             </button>
           </div>
 
+          {!browserSupported && (
+            <div className="mb-4 rounded-lg border border-no/40 bg-no/15 p-3 text-xs text-no">
+              <p className="font-semibold">
+                {browserDisplayName(browser)} doesn&apos;t support Solana wallet extensions.
+              </p>
+              <p className="mt-1 text-no/90">
+                Open this site in Chrome, Brave, Edge, or Firefox to connect a wallet. Steps below
+                still apply once you switch browsers.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-4">
             {/*
               Solflare goes FIRST — it offers a one-flow setup where you can
@@ -181,6 +233,10 @@ export function NetworkBadge() {
               clicking Select Wallet (extension treats itself as a manager,
               site as a client). For a first-time user the Solflare path is
               strictly easier; for an existing wallet user either works.
+              All extension-finding instructions are browser-specific via
+              findExtensionInstructions(detectBrowser(), name) — Chrome/Brave/
+              Edge use the puzzle-piece pattern; Firefox uses the toolbar
+              directly; Safari renders an unsupported-browser banner above.
             */}
             <div className="rounded-lg border border-yes/40 bg-yes/5 p-3">
               <div className="mb-2 flex items-center gap-2">
@@ -205,13 +261,11 @@ export function NetworkBadge() {
               </p>
               <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
                 <li>
-                  Open the Solflare extension (yellow icon shown above). Don&apos;t see it in your
-                  toolbar? Click the <span className="font-semibold">puzzle-piece</span> Extensions
-                  icon (top right of Chrome / Brave / Edge), pick <span className="font-semibold">Solflare</span>,
-                  pin for next time.
+                  <span className="font-semibold">Open the Solflare extension.</span>{" "}
+                  <span className="text-muted">{findExtensionInstructions(browser, "Solflare")}</span>
                 </li>
                 <li>If it&apos;s your first time, create or import a wallet from the wizard. Save the seed phrase on paper — never screenshot, never paste into cloud notes.</li>
-                <li>Click the <span className="font-semibold">three-dot menu</span> (top right of the extension popup).</li>
+                <li>Inside the open Solflare popup, click the <span className="font-semibold">three-dot menu</span> in the top-right corner.</li>
                 <li>Open <span className="font-semibold">Settings</span> → <span className="font-semibold">Manage Networks</span> → pick <span className="font-semibold">Devnet</span>.</li>
                 <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> → Solflare.</li>
               </ol>
@@ -223,7 +277,7 @@ export function NetworkBadge() {
               >
                 Solflare docs: changing networks →
               </a>
-              <BrowserCompatRow />
+              <BrowserCompatRow detected={browser} />
             </div>
 
             <div className="rounded-lg border border-panel bg-panel/40 p-3">
@@ -248,23 +302,38 @@ export function NetworkBadge() {
                 without an existing wallet, Phantom returns &quot;Unexpected error&quot; with no
                 popup. Use Solflare above if you want a one-step flow.
               </p>
+              {/*
+                Phantom devnet steps for the CURRENT Phantom UI (verified against
+                Phantom's own docs and recent third-party walkthroughs 2026-05-22).
+                The previously-shipped "gear icon bottom-right" step was for an
+                older Phantom build that was retired. Now it's the account avatar
+                in the TOP-LEFT of the popup, which opens a side panel containing
+                Settings → Developer Settings → Testnet Mode.
+              */}
               <ol className="list-decimal space-y-1.5 pl-5 text-xs text-text">
                 <li>
-                  Open the Phantom extension (purple icon shown above). Don&apos;t see it in your toolbar?
-                  Click the <span className="font-semibold">puzzle-piece</span> Extensions icon (top right
-                  of Chrome / Brave / Edge), pick <span className="font-semibold">Phantom</span>, pin for next time.
+                  <span className="font-semibold">Open the Phantom extension.</span>{" "}
+                  <span className="text-muted">{findExtensionInstructions(browser, "Phantom")}</span>
                 </li>
                 <li>
                   <span className="font-semibold text-no">FIRST-TIME USERS:</span> the popup shows
-                  &quot;Create a new wallet&quot; or &quot;Import a wallet.&quot; You MUST finish
-                  this step inside the extension. The site can&apos;t see an extension with
-                  zero wallets. Save the seed phrase on paper.
+                  &quot;Create a new wallet&quot; or &quot;Import an existing wallet.&quot; You MUST
+                  finish this step inside the extension. The site can&apos;t see an extension with
+                  zero wallets. Save the seed phrase on paper, never screenshot.
                 </li>
-                <li>Click the <span className="font-semibold">gear icon</span> (Settings, bottom right of the extension popup).</li>
-                <li>Scroll to <span className="font-semibold">Developer Settings</span> and tap it.</li>
-                <li>Turn on <span className="font-semibold">Testnet Mode</span> (toggle to ON).</li>
-                <li>Back on the main screen, tap the network name at the top (currently &quot;Mainnet&quot;) and pick <span className="font-semibold">Solana Devnet</span>.</li>
-                <li>Come back to this tab and click <span className="font-semibold">Select Wallet</span> → Phantom.</li>
+                <li>
+                  In the open Phantom popup, click the{" "}
+                  <span className="font-semibold">account avatar</span> (the colored circle in the{" "}
+                  <span className="font-semibold">top-left corner</span>). A side panel slides in.
+                </li>
+                <li>Click <span className="font-semibold">Settings</span> in the side panel.</li>
+                <li>Scroll down and tap <span className="font-semibold">Developer Settings</span>.</li>
+                <li>Toggle <span className="font-semibold">Testnet Mode</span> ON. A network list appears.</li>
+                <li>
+                  Make sure <span className="font-semibold">Solana Devnet</span> is checked. Important:
+                  Solana <em>Testnet</em> is a DIFFERENT network — Meridian uses Solana <em>Devnet</em>.
+                </li>
+                <li>Close the side panel and come back to this tab; click <span className="font-semibold">Select Wallet</span> → Phantom.</li>
               </ol>
               <a
                 href={PHANTOM_HELP_URL}
@@ -274,7 +343,7 @@ export function NetworkBadge() {
               >
                 Phantom docs: changing your network →
               </a>
-              <BrowserCompatRow />
+              <BrowserCompatRow detected={browser} />
             </div>
 
             <p className="text-xs text-muted">
