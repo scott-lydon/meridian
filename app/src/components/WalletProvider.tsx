@@ -48,6 +48,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 
 import { cluster } from "@/lib/cluster";
 import { queryClient } from "@/lib/queryClient";
+import { WalletSetupChecklist } from "@/components/WalletSetupChecklist";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -69,7 +70,15 @@ function describeWalletError(err: unknown): string {
     return "You closed the wallet popup before approving. Click connect again and approve in the popup.";
   }
   if (err instanceof WalletConnectionError) {
-    return `Wallet refused to connect: ${err.message || "no message provided"}. If the wallet is unlocked and on devnet, try disconnecting and reconnecting from the extension itself.`;
+    const rawMsg = err.message?.trim() || "";
+    // "Unexpected error" / "" / "no message provided" is what Phantom returns
+    // when the user has NOT created a wallet inside the extension yet, OR
+    // they dismissed the approval popup. The checklist component handles the
+    // detail; this top line just stops the user reading a useless string.
+    if (!rawMsg || /unexpected error|no message provided/i.test(rawMsg)) {
+      return "Connection refused with no specific reason — usually means you haven't created a wallet inside the extension yet, OR you dismissed the approval popup. The checklist below shows exactly which step is missing.";
+    }
+    return `Wallet refused to connect: ${rawMsg}. If the wallet is unlocked and on devnet, try disconnecting and reconnecting from the extension itself.`;
   }
   if (err instanceof WalletError) {
     return `Wallet error: ${err.name}${err.message ? ` — ${err.message}` : ""}.`;
@@ -110,18 +119,26 @@ function WalletErrorBanner({
       // user is in the middle of trying to connect. z-50 to outrank the
       // wallet modal's overlay. Manual dismiss; no auto-hide because the
       // user needs time to read multi-sentence guidance.
-      className="fixed inset-x-0 top-0 z-50 border-b border-no/40 bg-no/15 px-6 py-3 text-sm text-no shadow-lg backdrop-blur-md"
+      // max-h + overflow-y-auto so the banner stays bounded when the
+      // checklist + multi-sentence message would otherwise push past the
+      // viewport on a short screen. backdrop-blur-md keeps page content
+      // readable underneath.
+      className="fixed inset-x-0 top-0 z-50 max-h-screen overflow-y-auto border-b border-no/40 bg-no/15 px-6 py-3 text-sm text-no shadow-lg backdrop-blur-md"
     >
       <div className="mx-auto flex max-w-6xl items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="font-semibold">Wallet didn&apos;t connect.</p>
           {/* whitespace-pre-line so newlines in silentNoConnectMessage render
               as a real numbered list. */}
           <p className="mt-1 whitespace-pre-line text-no/90">{message}</p>
+          {/* Live setup checklist so the user can see WHICH of the four
+              prerequisites is unmet, rather than reading the failure
+              description and guessing. */}
+          <WalletSetupChecklist errorMessage={message} />
         </div>
         <button
           onClick={onDismiss}
-          className="rounded p-1 text-no/80 hover:bg-no/20 hover:text-no"
+          className="flex-shrink-0 rounded p-1 text-no/80 hover:bg-no/20 hover:text-no"
           aria-label="Dismiss wallet error"
           title="Dismiss"
         >
