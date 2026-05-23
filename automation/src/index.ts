@@ -96,45 +96,43 @@ logger.info(
 // scheduled morning fire is already in the past, and (c) we have not yet
 // recorded a morning run this trading day, then run it immediately and let
 // croner pick up tomorrow. Same logic for settlement.
+// Returns the UTC instant of today's slot at HH:MM in America/New_York.
+// Factored out of maybeRunCatchupJobs because the catch-up logic for
+// morning (08:00) and settlement (16:05) is the same shape; computing
+// the slot in one place avoids duplicating the Intl gymnastics.
+function todaysSlotEtMs(hour: number, minute: number): number | null {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: env.TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(new Date()).map((p) => [p.type, p.value]),
+  );
+  if (!parts.year) return null;
+  const offsetMinutes = -new Date(
+    `${parts.year}-${parts.month}-${parts.day}T12:00:00Z`,
+  ).getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const hh = String(Math.abs(Math.floor(offsetMinutes / 60))).padStart(2, "0");
+  const mm = String(Math.abs(offsetMinutes % 60)).padStart(2, "0");
+  const slot = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  const iso = `${parts.year}-${parts.month}-${parts.day}T${slot}:00${sign}${hh}:${mm}`;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
 function maybeRunCatchupJobs(): void {
   const nowMs = Date.now();
-  const today0800Et = (() => {
-    // Use Intl to compute today's 08:00 in America/New_York and convert
-    // back to a Date (UTC instant). Doing this without a real TZ library
-    // by leaning on Intl avoids adding a dependency for two lines.
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      timeZone: env.TZ,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const parts = Object.fromEntries(
-      fmt.formatToParts(new Date(nowMs)).map((p) => [p.type, p.value]),
-    );
-    // Construct an ISO string with explicit -04:00 (EDT) / -05:00 (EST)
-    // offset. croner's TZ resolution is the authoritative source for the
-    // scheduled fire; this catch-up just needs a reasonable approximation
-    // of "today's morning slot in ET" to compare against `now`.
-    const offsetMinutes = -new Date(
-      `${parts.year}-${parts.month}-${parts.day}T12:00:00Z`,
-    ).getTimezoneOffset();
-    // Default-stale: if Intl gives us nothing, fall back to UTC and let the
-    // operator notice via the boot log line below.
-    if (!parts.year) return null;
-    const iso = `${parts.year}-${parts.month}-${parts.day}T08:00:00${
-      offsetMinutes >= 0 ? "+" : "-"
-    }${String(Math.abs(Math.floor(offsetMinutes / 60))).padStart(2, "0")}:${String(
-      Math.abs(offsetMinutes % 60),
-    ).padStart(2, "0")}`;
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? null : d.getTime();
-  })();
-  if (today0800Et == null) {
-    logger.warn("catch-up: could not compute today's 08:00 ET; skipping");
+  const today0800Et = todaysSlotEtMs(8, 0);
+  const today1605Et = todaysSlotEtMs(16, 5);
+  if (today0800Et == null || today1605Et == null) {
+    logger.warn("catch-up: could not compute today's ET slots; skipping");
     return;
   }
-  // Only catch up while booting INSIDE the same trading day, after the
-  // morning slot. Outside that window, we want croner to handle it normally.
+  // Morning catch-up: if today's 08:00 ET slot is past and no run is
+  // recorded, run now and let croner pick up tomorrow.
   if (nowMs >= today0800Et && !lastMorningRun) {
     logger.info(
       { today0800Et: new Date(today0800Et).toISOString() },
@@ -148,6 +146,30 @@ function maybeRunCatchupJobs(): void {
         const message = err instanceof Error ? err.message : String(err);
         lastMorningRun = { at: new Date().toISOString(), error: message };
         logger.error({ err: message }, "catch-up morning job threw");
+      }
+    })();
+  }
+  // Settlement catch-up: same shape, different slot. The original boot
+  // catch-up only handled morning despite the comment claiming "same logic
+  // for settlement". That gap is exactly why every market created Friday
+  // 2026-05-22 stayed in AWAITING SETTLE through the weekend — the
+  // settlement cron is gated by isUsTradingDay (which is false on
+  // Sat/Sun) so a boot AFTER Friday's 16:05 slot has nothing else to
+  // catch the missed run until Monday. Fixing it here so the next missed
+  // slot recovers on the next boot without operator intervention.
+  if (nowMs >= today1605Et && !lastSettlementRun) {
+    logger.info(
+      { today1605Et: new Date(today1605Et).toISOString() },
+      "catch-up: today's settlement slot has passed and no run is recorded; running now",
+    );
+    void (async () => {
+      try {
+        const result = await runSettlementJob(env);
+        lastSettlementRun = { at: new Date().toISOString(), result };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        lastSettlementRun = { at: new Date().toISOString(), error: message };
+        logger.error({ err: message }, "catch-up settlement job threw");
       }
     })();
   }
@@ -210,6 +232,36 @@ const server = http.createServer((req, res) => {
       })
       .catch((err) => {
         logger.error({ err: String(err) }, "manual morning trigger failed");
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: String(err) }));
+      });
+    return;
+  }
+  if (req.url === "/trigger/settle") {
+    // Manual settlement trigger. Mirrors /trigger/morning. Same intent:
+    // unblock a manual recovery when the scheduled cron missed, without
+    // shelling into the Render service. runSettlementJob is idempotent —
+    // already-settled markets are filtered out by the
+    // `Object.keys(...outcome.state)[0] === "pending"` filter. Safe to
+    // call any number of times.
+    //
+    // WTF heads-up: runSettlementJob short-circuits with
+    // settledViaPyth=0 / settledViaAdmin=0 / stillOpen=0 on weekends or
+    // holidays (isUsTradingDay returns false), because it only ever
+    // looks at TODAY's trading day. If you are calling this on a
+    // Saturday to clean up Friday's missed settlement, the response
+    // will be a "skipped" body and nothing will actually settle. For
+    // that case the boot-time catch-up is the right path (kick a
+    // redeploy or wait for the next service restart), since it does
+    // not key off "today is a US trading day".
+    runSettlementJob(env)
+      .then((r) => {
+        lastSettlementRun = { at: new Date().toISOString(), result: r };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(r));
+      })
+      .catch((err) => {
+        logger.error({ err: String(err) }, "manual settle trigger failed");
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: String(err) }));
       });
