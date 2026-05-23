@@ -122,6 +122,15 @@ export default function TradePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [lastSig, setLastSig] = useState<string | null>(null);
   const [lastErr, setLastErr] = useState<string | null>(null);
+  // Predicted balance delta for the most recent action ("+3 YES, +3 NO,
+  // −$3 USDC"). Buttons set this when calling `run` so the confirmation
+  // toast can tell the user exactly what changed, instead of forcing them
+  // to mentally diff the position pills. Predicted, not measured: the
+  // useMarketBalances refetch is ~3s and racy with the toast lifecycle, so
+  // we use the known instruction shape + qty. Errors clear it. Refunds
+  // (failed IOC, partial fill, etc.) would make a predicted delta wrong —
+  // those paths bubble through `lastErr` and the predicted delta is wiped.
+  const [lastDelta, setLastDelta] = useState<string | null>(null);
 
   const m = markets?.find((x) => x.pubkey === market);
   const balances = useMarketBalances(market);
@@ -153,7 +162,13 @@ export default function TradePage({
     return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
   }
 
-  async function run(label: string, fn: () => Promise<string>) {
+  // `delta` is an optional human-readable description of the expected
+  // balance change ("+3 YES, +3 NO, −$3 USDC"). The confirmation toast
+  // renders it so the user does not have to mentally diff pills. On
+  // failure the delta is wiped because the wallet did not sign / the
+  // tx was rejected / a partial-fill refund happened, and we do not
+  // want a stale "+3 YES" message lingering.
+  async function run(label: string, fn: () => Promise<string>, delta?: string) {
     if (!publicKey) {
       setLastErr("Connect a wallet first.");
       return;
@@ -161,13 +176,18 @@ export default function TradePage({
     setBusy(label);
     setLastErr(null);
     setLastSig(null);
+    setLastDelta(null);
     try {
       const sig = await fn();
       setLastSig(sig);
-      // Refresh book + balances
+      if (delta) setLastDelta(delta);
+      // Refresh book + balances so the pills tick to the new values on
+      // the next React Query interval (3s for balances, 2s for the book).
       void queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(market) });
+      void queryClient.invalidateQueries({ queryKey: ["market-balances", market, publicKey.toBase58()] });
     } catch (e) {
       setLastErr(e instanceof Error ? e.message : String(e));
+      setLastDelta(null);
     } finally {
       setBusy(null);
     }
@@ -219,6 +239,14 @@ export default function TradePage({
               <span className="text-xl text-yes">✓</span>
               <div>
                 <p className="font-semibold text-text">Transaction confirmed</p>
+                {lastDelta && (
+                  // Predicted delta (not measured) — see the comment on
+                  // `lastDelta` state. Surfacing it inline is the single
+                  // biggest fix to the "I tapped mint pair and nothing
+                  // visible changed" complaint, because the pills don't
+                  // tick until the next 3s refetch window.
+                  <p className="mt-0.5 font-mono text-sm text-yes">{lastDelta}</p>
+                )}
                 <p className="text-xs text-muted">
                   <a className="text-accent underline" href={explorerTx(lastSig)} target="_blank" rel="noreferrer">
                     View on Solana Explorer →
@@ -238,7 +266,7 @@ export default function TradePage({
             </div>
           )}
           <button
-            onClick={() => { setLastSig(null); setLastErr(null); }}
+            onClick={() => { setLastSig(null); setLastErr(null); setLastDelta(null); }}
             className="rounded p-1 text-muted hover:bg-panel hover:text-text"
             aria-label="Dismiss"
             title="Dismiss"
@@ -268,19 +296,72 @@ export default function TradePage({
         </section>
       )}
 
-      {/* Position summary */}
+      {/* Position summary.
+          WTF heads-up: the pills below show the connected wallet's SPL token
+          balances for THIS market — not order-book depth, not bids, not order
+          counts. The "Your holdings" label is load-bearing because earlier
+          versions just said "Yes: 3" and users reasonably read that as "3 open
+          bids" or "3 of something else". Don't drop the label.
+          Balances refresh on a 3s React Query interval (useMarketBalances). */}
       {publicKey && (
-        <section className="mb-6 flex gap-3 text-sm">
-          <span className="rounded-full bg-yes/20 px-3 py-1 text-yes">
-            Yes: <span className="font-mono">{userYesBal.toString()}</span>
-          </span>
-          <span className="rounded-full bg-no/20 px-3 py-1 text-no">
-            No: <span className="font-mono">{userNoBal.toString()}</span>
-          </span>
-          {(holdsYes || holdsNo) && (
-            <span className="rounded-full bg-yellow-500/20 px-3 py-1 text-yellow-300">
-              Position constraint: cannot Buy {holdsYes ? "No" : "Yes"} until you exit current position
+        <section className="mb-6 space-y-2 text-sm">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs uppercase tracking-wider text-muted">
+              Your holdings in this market:
             </span>
+            <span className="rounded-full bg-yes/20 px-3 py-1 text-yes">
+              YES tokens owned: <span className="font-mono font-semibold">{userYesBal.toString()}</span>
+            </span>
+            <span className="rounded-full bg-no/20 px-3 py-1 text-no">
+              NO tokens owned: <span className="font-mono font-semibold">{userNoBal.toString()}</span>
+            </span>
+          </div>
+          {/* Surface ALL active gates, not just one. The prior single-line
+              constraint only ever named one side (`holdsYes ? "No" : "Yes"`),
+              so a user holding BOTH sides saw "cannot Buy No" while Buy Yes
+              was also blocked — silently. Listing every active reason is the
+              fix. Book-liquidity gates (no bestBid / no bestAsk) belong here
+              too because they disable Buy No / Sell No for non-position
+              reasons that the user otherwise has no way to discover. */}
+          {(holdsYes || holdsNo || !bestBid || !bestAsk) && (
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-200">
+              <p className="font-semibold text-yellow-100">Why some buttons are disabled:</p>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {holdsNo && (
+                  <li>
+                    <span className="font-semibold">Buy Yes</span> is disabled because you already hold NO tokens.
+                    Sell your NO position first (or wait for settlement + redeem).
+                  </li>
+                )}
+                {holdsYes && (
+                  <li>
+                    <span className="font-semibold">Buy No</span> is disabled because you already hold YES tokens.
+                    Sell your YES position first (or wait for settlement + redeem).
+                  </li>
+                )}
+                {!bestBid && (
+                  <li>
+                    <span className="font-semibold">Buy No</span> also needs at least one resting BID on the YES side
+                    of the order book (it atomically mints a pair and sells the YES into that bid).
+                    Currently the book has no bids.
+                  </li>
+                )}
+                {!bestAsk && (
+                  <li>
+                    <span className="font-semibold">Sell No</span> needs at least one resting ASK on the YES side
+                    of the order book (it atomically buys YES from that ask, then redeems the pair).
+                    Currently the book has no asks.
+                  </li>
+                )}
+              </ul>
+              {(holdsYes || holdsNo) && (
+                <p className="mt-2 text-yellow-200/70">
+                  Why the position constraint exists: holding both sides at once is economically a no-op
+                  (each YES+NO pair pays exactly $1 at settlement regardless of outcome), so the product blocks
+                  you from accidentally minting more.
+                </p>
+              )}
+            </div>
           )}
         </section>
       )}
@@ -436,11 +517,24 @@ export default function TradePage({
               </p>
             </div>
           )}
+          {/* Trade buttons.
+              WTF heads-up on the disabled styling: every button gets BOTH
+              opacity-40 AND a forced color override (`disabled:bg-panel/40
+              disabled:text-muted disabled:border-panel`). Earlier styling
+              kept the colored background/text under `disabled:opacity-40`
+              alone, so a 40%-dimmed-but-still-green Buy Yes button looked
+              identical to an enabled-but-pale Buy Yes button. The full
+              color stripping makes "you cannot click this" unambiguous at
+              a glance, without needing to hover for the title attribute.
+              `cursor-not-allowed` reinforces the affordance.
+              Reasons live in the constraints box above the form, NOT only
+              in hover tooltips — so a user on a touch device still sees
+              the why. */}
           <div className="grid grid-cols-2 gap-2">
             <button
               disabled={!trade.ready || busy !== null || holdsNo || isExpired}
-              onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty))}
-              className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:opacity-40"
+              onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty), `+${qty} YES (resting bid at ${priceTicks}¢)`)}
+              className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
               title={isExpired ? "Market expired" : holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
             >
               {busy === "Buy Yes" ? "..." : "Buy Yes"}
@@ -448,11 +542,13 @@ export default function TradePage({
             <button
               disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired}
               onClick={() =>
-                run("Buy No", () =>
-                  trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
+                run(
+                  "Buy No",
+                  () => trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
+                  bestBid ? `+${qty} NO (paid ~$${((100 - bestBid.priceTicks) / 100).toFixed(2)} each)` : `+${qty} NO`,
                 )
               }
-              className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:opacity-40"
+              className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
               title={
                 isExpired
                   ? "Market expired"
@@ -467,8 +563,8 @@ export default function TradePage({
             </button>
             <button
               disabled={!trade.ready || busy !== null || !holdsYes || isExpired}
-              onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty))}
-              className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
+              onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty), `−${qty} YES into escrow (limit ask ${priceTicks}¢)`)}
+              className="rounded-lg border border-yes/40 bg-panel px-3 py-2 font-semibold text-yes hover:bg-yes/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
               title={isExpired ? "Market expired" : !holdsYes ? "Need Yes tokens to sell" : ""}
             >
               {busy === "Sell Yes" ? "..." : "Sell Yes"}
@@ -476,11 +572,13 @@ export default function TradePage({
             <button
               disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired}
               onClick={() =>
-                run("Sell No", () =>
-                  trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
+                run(
+                  "Sell No",
+                  () => trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
+                  bestAsk ? `−${qty} NO (received ~$${((100 - bestAsk.priceTicks) / 100).toFixed(2)} each)` : `−${qty} NO`,
                 )
               }
-              className="rounded-lg bg-panel px-3 py-2 text-muted hover:bg-bg disabled:opacity-40"
+              className="rounded-lg border border-no/40 bg-panel px-3 py-2 font-semibold text-no hover:bg-no/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
               title={
                 isExpired
                   ? "Market expired"
@@ -497,8 +595,8 @@ export default function TradePage({
 
           <button
             disabled={!trade.ready || busy !== null || isExpired}
-            onClick={() => run("Mint Pair", () => trade.mintPair(qty))}
-            className="mt-3 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:opacity-40"
+            onClick={() => run("Mint Pair", () => trade.mintPair(qty), `+${qty} YES, +${qty} NO, −$${qty}.00 USDC`)}
+            className="mt-3 w-full rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/20 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
           >
             {busy === "Mint Pair" ? "..." : `Mint ${qty} pair (deposit $${qty}.00 USDC)`}
           </button>
