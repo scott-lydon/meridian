@@ -12,6 +12,7 @@ import {
   sessionPhase,
   sessionPhaseBannerCopy,
 } from "@/lib/marketSession";
+import { useAfterHoursMode } from "@/lib/afterHoursMode";
 
 // Force runtime rendering — the page depends on the wallet adapter and
 // Anchor client, which pull Node-only modules at module-init time.
@@ -22,8 +23,14 @@ const MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] as const;
 
 export default function MarketsPage() {
   const { data, isLoading, error } = useMarkets();
+  // After-hours toggle (header) bypasses the wall-clock UI gates so the
+  // user can test mint/buy/sell against past-expiry markets. The on-chain
+  // program already permits these transactions; only the product's
+  // wall-clock rules are relaxed. AfterHoursBanner shows a persistent
+  // amber strip while the bypass is active so it cannot be forgotten.
+  const [afterHoursMode] = useAfterHoursMode();
   const phase = sessionPhase();
-  const banner = sessionPhaseBannerCopy(phase);
+  const banner = afterHoursMode ? null : sessionPhaseBannerCopy(phase);
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -87,7 +94,17 @@ export default function MarketsPage() {
                     .sort((a, b) => Number(a.strikeUsd - b.strikeUsd))
                     .map((m) => {
                       const state = marketUiState(m);
-                      const clickable = isTradeable(state);
+                      // When after-hours mode is ON, every non-settled
+                      // market is clickable+tradeable. The settled states
+                      // (won-yes / won-no) stay non-tradeable regardless
+                      // because the program ITSELF blocks trades on
+                      // settled markets (MarketAlreadySettled error) —
+                      // the toggle cannot bypass that, nor would we want
+                      // it to.
+                      const isOpenOnChain = state !== "won-yes" && state !== "won-no";
+                      const clickable = afterHoursMode
+                        ? isOpenOnChain
+                        : isTradeable(state);
                       // Non-tradeable rows still link to the trade page so a
                       // user can read the settled outcome, but the visual
                       // affordance dims and the pill colour signals why the

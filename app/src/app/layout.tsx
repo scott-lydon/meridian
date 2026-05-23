@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
+import { AfterHoursBanner } from "@/components/AfterHoursModeToggle";
 import { MeridianProviders } from "@/components/WalletProvider";
 import { Header } from "@/components/Header";
 
@@ -39,6 +40,14 @@ export default function RootLayout({
       <body className="min-h-screen bg-bg font-sans text-text antialiased">
         <MeridianProviders>
           <Header />
+          {/*
+            AfterHoursBanner returns null when the toggle is OFF, so it
+            has zero layout cost in the default case. When ON, it docks
+            just under the Header sticky bar with a loud amber strip and
+            a one-click "Turn off" — the constant visual reminder that
+            UI expiry gates are bypassed.
+          */}
+          <AfterHoursBanner />
           {children}
         </MeridianProviders>
       </body>

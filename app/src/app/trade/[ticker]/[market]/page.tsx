@@ -12,6 +12,7 @@ import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 import { marketUiState } from "@/lib/marketSession";
+import { useAfterHoursMode } from "@/lib/afterHoursMode";
 
 function useCountdown(toUnix: number | undefined): string {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -136,7 +137,14 @@ export default function TradePage({
   // not "what the program enforces". Follow-up task tracked in the project
   // tasks.md to add the on-chain check; until then, do not delete this
   // client-side gate. Also drives the settled-aware banner copy below.
-  const isExpired = !!m?.expiryUnix && m.expiryUnix * 1000 <= Date.now();
+  //
+  // After-hours testing mode (header toggle) flips this off so the user can
+  // exercise the real on-chain trading instructions against past-expiry
+  // markets. AfterHoursBanner shows a persistent strip while the bypass is
+  // active so the relaxed gate cannot be forgotten.
+  const [afterHoursMode] = useAfterHoursMode();
+  const expiryHasPassed = !!m?.expiryUnix && m.expiryUnix * 1000 <= Date.now();
+  const isExpired = expiryHasPassed && !afterHoursMode;
   const uiState = m ? marketUiState(m) : null;
   const isSettled = uiState === "won-yes" || uiState === "won-no";
 

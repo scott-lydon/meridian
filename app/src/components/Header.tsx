@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { AfterHoursModeToggle } from "@/components/AfterHoursModeToggle";
 import { ConnectButton } from "@/components/ConnectButton";
 import { NetworkBadge } from "@/components/NetworkBadge";
 
@@ -30,6 +31,7 @@ export function Header() {
           </nav>
         </div>
         <div className="flex items-center gap-3">
+          <AfterHoursModeToggle />
           <NetworkBadge />
           <ConnectButton />
         </div>

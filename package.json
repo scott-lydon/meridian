@@ -22,6 +22,8 @@
     "anchor:keys": "anchor keys list",
     "validator": "solana-test-validator --reset --quiet",
     "deploy:devnet": "anchor deploy --provider.cluster devnet",
+    "seed:devnet": "cd tests && node ../scripts/seed-devnet.mjs",
+    "seed:late": "cd tests && node ../scripts/seed-late-market.mjs",
     "dev": "concurrently --kill-others-on-fail --names validator,app,automation -c blue,green,magenta \"pnpm validator\" \"pnpm --filter @meridian/app dev\" \"pnpm --filter @meridian/automation dev\"",
     "preinstall": "npx only-allow pnpm"
   },
