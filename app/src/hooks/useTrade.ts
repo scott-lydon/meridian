@@ -269,6 +269,40 @@ export function useTrade(marketPubkey: string | undefined) {
     [program, publicKey, marketPubkey, ensureAtas, sendTransaction, provider.connection],
   );
 
+  // redeem_pair — burn N Yes + N No from the caller's ATAs, receive N USDC
+  // back from the vault. Inverse of mint_pair. Pre-settlement only — once a
+  // market settles, the asymmetric `redeem` (one side pays $1, the other $0)
+  // is the right call. Solves "I minted on an empty-book market and now my
+  // USDC is stuck": this instruction lets the user unwind without book
+  // liquidity and without waiting for settlement.
+  const redeemPair = useCallback(
+    async (qty: number): Promise<string> => {
+      if (!publicKey || !marketPubkey) throw new Error("wallet or market missing");
+      const addrs = deriveMarketAddresses(program.programId, new PublicKey(marketPubkey));
+      const { atas, createIxs } = await ensureAtas(addrs);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ix = await (program.methods as any)
+        .redeemPair(new BN(qty))
+        .accounts({
+          config: PublicKey.findProgramAddressSync([Buffer.from("config"), Buffer.from([1])], program.programId)[0],
+          market: addrs.market,
+          vaultAuthority: addrs.vaultAuthority,
+          yesMint: addrs.yesMint,
+          noMint: addrs.noMint,
+          vault: addrs.vault,
+          userUsdc: atas.userUsdc,
+          userYes: atas.userYes,
+          userNo: atas.userNo,
+          user: publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction();
+      const tx = new anchor.web3.Transaction().add(...createIxs, ix);
+      return await sendTransaction(tx, provider.connection);
+    },
+    [program, publicKey, marketPubkey, ensureAtas, sendTransaction, provider.connection],
+  );
+
   // cancel_order(side, sequence) — caller passes the order's side ("Bid" or "Ask")
   // and the on-chain sequence number from the order book row. Refunds escrowed
   // USDC (for bids) or Yes tokens (for asks) back to the user's ATA.
@@ -300,5 +334,5 @@ export function useTrade(marketPubkey: string | undefined) {
     [program, publicKey, marketPubkey, ensureAtas, sendTransaction, provider.connection],
   );
 
-  return { buyYes, sellYes, buyNo, sellNo, mintPair, cancelOrder, ready: !!publicKey && !!marketPubkey };
+  return { buyYes, sellYes, buyNo, sellNo, mintPair, redeemPair, cancelOrder, ready: !!publicKey && !!marketPubkey };
 }

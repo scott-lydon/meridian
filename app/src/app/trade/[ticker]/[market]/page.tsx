@@ -601,6 +601,47 @@ export default function TradePage({
             {busy === "Mint Pair" ? "..." : `Mint ${qty} pair (deposit $${qty}.00 USDC)`}
           </button>
 
+          {/* Redeem Pair — inverse of Mint Pair. Pre-settlement only.
+              Disabled unless the user holds at least `qty` of BOTH YES and
+              NO (you cannot burn a pair you do not have both halves of).
+              On settled markets the on-chain redeem_pair errors with
+              MarketAlreadySettled, so we gate it client-side on isSettled
+              too — and direct the user to the asymmetric redeem flow on
+              the portfolio page. Without this button the only pre-settle
+              exit was "sell into the book", which fails when the book is
+              empty (the case that produced the original "$3 stuck"
+              complaint). The redeemable pair count is min(YES, NO);
+              showing it on the label removes the "wait, how many can I
+              redeem" friction. */}
+          {(() => {
+            const pairBal = userYesBal < userNoBal ? userYesBal : userNoBal;
+            const pairBalNum = Number(pairBal);
+            const wantsMore = BigInt(qty) > pairBal;
+            const redeemDisabled =
+              !trade.ready || busy !== null || isExpired || isSettled || pairBal === 0n || wantsMore;
+            const settledHint = isSettled
+              ? "Market is settled — go to Portfolio and redeem the winning side instead."
+              : pairBal === 0n
+                ? "You don't hold a YES+NO pair on this market."
+                : wantsMore
+                  ? `Only ${pairBalNum} pair${pairBalNum === 1 ? "" : "s"} available (limited by the smaller of your YES / NO balance).`
+                  : "";
+            return (
+              <button
+                disabled={redeemDisabled}
+                onClick={() =>
+                  run("Redeem Pair", () => trade.redeemPair(qty), `−${qty} YES, −${qty} NO, +$${qty}.00 USDC`)
+                }
+                className="mt-2 w-full rounded-lg border border-accent/40 bg-panel px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                title={settledHint}
+              >
+                {busy === "Redeem Pair"
+                  ? "..."
+                  : `Redeem ${qty} pair → $${qty}.00 USDC (you have ${pairBalNum} redeemable)`}
+              </button>
+            );
+          })()}
+
           {/* lastSig + lastErr now render in the prominent top-of-page toast. */}
             </>
           )}
@@ -624,6 +665,9 @@ export default function TradePage({
           </li>
           <li>
             <span className="text-accent">Mint Pair</span>: deposit <code>{qty} USDC</code>, get <code>{qty} Yes</code> + <code>{qty} No</code>. Use this to seed liquidity.
+          </li>
+          <li>
+            <span className="text-accent">Redeem Pair</span>: burn <code>{qty} Yes</code> + <code>{qty} No</code>, recover <code>{qty} USDC</code> from the vault. Inverse of Mint Pair. Pre-settlement only — once the market settles, use the asymmetric Redeem on the Portfolio page (winner pays $1, loser pays $0).
           </li>
         </ul>
       </section>

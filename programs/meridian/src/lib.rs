@@ -85,6 +85,13 @@ pub mod meridian {
         instructions::redeem::handler(ctx, side, qty)
     }
 
+    /// Inverse of `mint_pair`: burn N Yes + N No, get N USDC back.
+    /// Pre-settlement only. Lets users unwind a paired position
+    /// without waiting for settlement or needing book liquidity.
+    pub fn redeem_pair(ctx: Context<RedeemPair>, qty: u64) -> Result<()> {
+        instructions::redeem_pair::handler(ctx, qty)
+    }
+
     // ===== Slice 3: in-program order book =====
 
     /// Admin creates the order-book PDA + escrow ATAs for a market.
