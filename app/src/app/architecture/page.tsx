@@ -22,6 +22,8 @@ import { useEffect } from "react";
 
 import Link from "next/link";
 
+import { techIconUrl } from "@/lib/techIcons";
+
 export const dynamic = "force-dynamic";
 
 // Re-render Mermaid every time the page mounts. Safe to call repeatedly;
@@ -269,13 +271,19 @@ function Eli7Card({ emoji, title, children }: { emoji: string; title: string; ch
 // 2 — Topology (Mermaid flowchart).
 // ===========================================================================
 
+// Mermaid topology diagram. Icons reference inline data URLs from
+// techIcons.ts (no cdn.simpleicons.org) so the diagram renders identically
+// in Safari, which silently drops simpleicons CDN requests under Strict
+// tracking-prevention. mermaid.initialize is called with securityLevel:
+// "loose" elsewhere in this file, which is what permits <img> in node
+// labels in the first place.
 const TOPOLOGY_MERMAID = `flowchart LR
   subgraph Client["Client"]
-    Wallet["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='18'/> Phantom wallet"]
+    Wallet["<img src='${techIconUrl("phantom")}' width='18'/> Phantom wallet"]
   end
   subgraph Solana["Solana devnet"]
     direction TB
-    Program["<img src='https://cdn.simpleicons.org/rust/c1763a' width='18'/> Meridian program<br/>(Anchor 0.31.1)"]
+    Program["<img src='${techIconUrl("rust")}' width='18'/> Meridian program<br/>(Anchor 0.31.1)"]
     Config["Config PDA"]
     Market["Market PDA<br/>(per strike per day)"]
     Book["OrderBook<br/>(zero-copy slabs)"]
@@ -284,11 +292,11 @@ const TOPOLOGY_MERMAID = `flowchart LR
   end
   subgraph Off["Off-chain"]
     direction TB
-    Frontend["<img src='https://cdn.simpleicons.org/nextdotjs/ffffff' width='18'/> Next.js 14<br/>(Render)"]
-    Automation["<img src='https://cdn.simpleicons.org/nodedotjs/339933' width='18'/> Automation<br/>(Render)"]
+    Frontend["<img src='${techIconUrl("nextdotjs")}' width='18'/> Next.js 14<br/>(Render)"]
+    Automation["<img src='${techIconUrl("nodedotjs")}' width='18'/> Automation<br/>(Render)"]
   end
   subgraph Oracle["Oracle"]
-    Pyth["<img src='https://cdn.simpleicons.org/pyth/4ec9b0' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
+    Pyth["<img src='${techIconUrl("pyth")}' width='18'/> Pyth Hermes<br/>MAG7 equity feeds"]
   end
   Wallet -->|sign tx| Frontend
   Frontend -->|RPC| Program
@@ -431,12 +439,10 @@ function ComponentsSection() {
         {COMPONENTS.map((c) => (
           <div key={c.title} className="rounded-2xl border border-panel bg-panel/40 p-6">
             <div className="mb-2 flex items-center gap-2">
-              <img
-                src={`https://cdn.simpleicons.org/${c.icon}/${c.iconColor}`}
-                width={20}
-                height={20}
-                alt=""
-              />
+              {/* Inline data URL — see lib/techIcons.ts. cdn.simpleicons.org
+                  is forbidden because Safari Strict tracking-prevention
+                  silently drops those requests. */}
+              <img src={techIconUrl(c.icon)} width={20} height={20} alt="" />
               <h3 className="text-xl font-semibold">{c.title}</h3>
             </div>
             <p className="text-xs uppercase tracking-wider text-muted">{c.chain}</p>
@@ -834,12 +840,8 @@ function StackSection() {
             key={s.name}
             className="flex items-center gap-2 rounded-lg border border-panel bg-panel/40 px-3 py-2"
           >
-            <img
-              src={`https://cdn.simpleicons.org/${s.icon}/${s.iconColor}`}
-              width={20}
-              height={20}
-              alt=""
-            />
+            {/* Inline data URL — see lib/techIcons.ts. */}
+            <img src={techIconUrl(s.icon)} width={20} height={20} alt="" />
             <span className="text-sm">{s.name}</span>
           </div>
         ))}
