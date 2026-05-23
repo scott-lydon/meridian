@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
@@ -366,10 +367,26 @@ export default function TradePage({
         <div className="rounded-2xl border border-panel bg-panel/40 p-5">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">Trade</h2>
 
+          {/* Without a wallet, no instruction in this panel can sign — the
+              buy/sell/mint handlers all bail on `if (!publicKey) ...`. Render
+              a prominent connect CTA in place of the form so the user has
+              exactly one obvious next action, instead of grey buttons + a
+              small yellow note that ask them to find a separate header
+              button. The form re-renders once `publicKey` is set. */}
           {!publicKey && (
-            <p className="mb-3 text-sm text-yellow-300">Connect your wallet to trade.</p>
+            <div className="mb-1 rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">
+              <p className="mb-2 font-semibold text-text">Connect a wallet to mint, buy, or sell</p>
+              <p className="mb-3 text-xs text-muted">
+                Trading goes directly to the Solana devnet program — every action requires a
+                signature. Set your Phantom or Solflare wallet to Devnet, then click below.
+                Click the DEVNET pill in the header for click-by-click instructions for your wallet.
+              </p>
+              <WalletMultiButton className="!h-10 !rounded-xl !bg-accent !text-sm hover:!bg-accentHover" />
+            </div>
           )}
 
+          {publicKey && (
+            <>
           <label className="mb-2 block text-xs text-muted">Quantity (Yes tokens)</label>
           <input
             type="number"
@@ -487,6 +504,8 @@ export default function TradePage({
           </button>
 
           {/* lastSig + lastErr now render in the prominent top-of-page toast. */}
+            </>
+          )}
         </div>
       </section>
 
