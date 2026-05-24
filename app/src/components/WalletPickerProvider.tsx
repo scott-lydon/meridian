@@ -46,11 +46,11 @@ import type { ReactNode } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletReadyState, type WalletName } from "@solana/wallet-adapter-base";
 
+import { WalletBrandIcon } from "@/components/WalletBrandIcon";
 import {
-  PHANTOM_ICON_DATA_URL,
-  SOLFLARE_ICON_DATA_URL,
-  BACKPACK_ICON_DATA_URL,
-} from "@/lib/walletIcons";
+  getWalletInstallUrl,
+  type SupportedInstallWalletName,
+} from "@/lib/walletInstallLinks";
 
 interface WalletPickerContextValue {
   /** Open the picker modal. Idempotent. */
@@ -84,12 +84,25 @@ export function useWalletPicker(): WalletPickerContextValue {
  * than discovering it at runtime because the whole point of this list is to
  * show wallets the user does NOT have yet — runtime detection returns nothing.
  *
- * `iconDataUrl` is always an inline `data:image/svg+xml;base64,...` URL —
- * NEVER a third-party CDN. This is enforced because cdn.simpleicons.org
- * fetches are silently dropped by Safari's Strict tracking-prevention
- * (the request returns 200 but the image never paints), as documented in
- * `lib/walletIcons.ts`. The data URL ships inline with the JS bundle so
- * the row renders identically in Safari, Chrome, Firefox, Brave, and Edge.
+ * `name` is the human-readable wallet brand AND the lookup key into
+ * `getWalletInstallUrl` in `lib/walletInstallLinks.ts`. The install URL is
+ * resolved per-render so a Firefox visitor receives the Mozilla Add-ons link
+ * and a Chrome / Brave / Edge visitor receives the Chrome Web Store deep link,
+ * rather than every visitor landing on the wallet's marketing `/download`
+ * page (which on 2026-05-24 redirected first-time Phantom users to
+ * phantom.com home, creating a dead end — see file-top WTF and
+ * `lib/walletInstallLinks.ts` file-top WTF).
+ *
+ * The brand mark for each row is rendered as INLINE SVG JSX by
+ * `<WalletBrandIcon>` rather than as an `<img src="data:image/svg+xml;...">`.
+ * Real-user reports on 2026-05-24 (both Safari and Chrome on macOS) showed
+ * the Phantom and Solflare data-URL <img> elements rendering as the
+ * browser's broken-image glyph while the Backpack chip (drawn directly in
+ * JSX) rendered fine. The differentiator was the rendering pipeline, not
+ * the SVG content — base64-decoding the data URLs produced valid SVG in
+ * every case. Inlining the SVG eliminates the data-URL parsing step and
+ * any extension-level image blocking; see `components/WalletBrandIcon.tsx`
+ * for the full rationale.
  *
  * `firstTimeRecommended` flags Solflare because it lets the user create the
  * wallet inside the connect popup (single flow). Phantom requires a wallet to
@@ -97,9 +110,7 @@ export function useWalletPicker(): WalletPickerContextValue {
  * crypto user that's two flows instead of one and a higher drop-off rate.
  */
 interface WalletInstallOption {
-  name: string;
-  href: string;
-  iconDataUrl: string;
+  name: SupportedInstallWalletName;
   blurb: string;
   firstTimeRecommended?: true;
 }
@@ -107,23 +118,17 @@ interface WalletInstallOption {
 const INSTALL_OPTIONS: readonly WalletInstallOption[] = [
   {
     name: "Solflare",
-    href: "https://solflare.com/download",
-    iconDataUrl: SOLFLARE_ICON_DATA_URL,
     blurb:
       "Easiest first-time setup. Lets you create a wallet as part of the connect popup (one flow).",
     firstTimeRecommended: true,
   },
   {
     name: "Phantom",
-    href: "https://phantom.com/download",
-    iconDataUrl: PHANTOM_ICON_DATA_URL,
     blurb:
       "Most popular wallet. You must create a wallet inside the extension BEFORE clicking connect here.",
   },
   {
     name: "Backpack",
-    href: "https://backpack.app/download",
-    iconDataUrl: BACKPACK_ICON_DATA_URL,
     blurb: "Newer wallet. Supports xNFTs.",
   },
 ];
@@ -141,6 +146,65 @@ const INSTALL_OPTIONS: readonly WalletInstallOption[] = [
  *     even users with Phantom installed often haven't created an in-extension
  *     wallet yet, and the first-time-Solflare guidance applies to them too.
  */
+/**
+ * Persistent setup checklist shown beneath the install buttons. The user's
+ * journey when they have no wallet yet is: install the extension, create a
+ * wallet inside it, switch the wallet to Solana Devnet, fund the wallet from
+ * a faucet, then return and click Connect. None of those four post-install
+ * steps are obvious from a one-line "Install Phantom" button, and skipping
+ * any of them produces the silent-click failure the WalletWatcher in
+ * `WalletProvider.tsx` catches after the fact. Surfacing the steps before
+ * the user takes the broken path is strictly better than catching the
+ * failure after.
+ *
+ * Stays visible whether or not a wallet is currently detected, because the
+ * second-most common WTF is "I see Phantom in the picker but clicking it
+ * does nothing." Step 3 (switch to Solana Devnet) fixes that case.
+ */
+function PostInstallChecklist() {
+  return (
+    <div className="mt-4 rounded-lg border border-accent/30 bg-accent/5 p-3 text-xs text-text">
+      <p className="mb-2 font-semibold text-accent">
+        After installing the extension, do these five steps BEFORE clicking Connect:
+      </p>
+      <ol className="list-decimal space-y-1.5 pl-5 text-text">
+        <li>
+          Click the wallet icon in your browser toolbar to open it. If you don&apos;t see it,
+          click the puzzle-piece icon to the right of the address bar and pin the wallet.
+        </li>
+        <li>
+          Choose <span className="font-semibold">Create a new wallet</span>. Write the
+          12-word recovery phrase on paper. Anyone with the phrase owns the wallet.
+        </li>
+        <li>
+          Open wallet Settings (gear icon), turn on{" "}
+          <span className="font-semibold">Testnet Mode</span> (Phantom labels this
+          &quot;Developer Settings&quot;), then switch the network to{" "}
+          <span className="font-semibold">Solana Devnet</span>. Meridian only runs on
+          Devnet.
+        </li>
+        <li>
+          Visit{" "}
+          <a
+            href="https://faucet.solana.com"
+            target="_blank"
+            rel="noreferrer"
+            className="underline decoration-accent/60 underline-offset-2 hover:text-accent"
+          >
+            faucet.solana.com
+          </a>
+          , paste your wallet address, request 1 SOL. This pays transaction fees and is
+          free.
+        </li>
+        <li>
+          Reload this page, click <span className="font-semibold">Connect</span>, pick
+          your wallet, approve in the popup.
+        </li>
+      </ol>
+    </div>
+  );
+}
+
 function WalletPickerModal({ onClose }: { onClose: () => void }) {
   const { wallets, select, connect } = useWallet();
 
@@ -278,21 +342,24 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
             {INSTALL_OPTIONS.map((opt) => (
               <li key={opt.name}>
                 <a
-                  href={opt.href}
+                  // Resolve per-render so a Firefox visitor lands on Mozilla
+                  // Add-ons and a Chromium visitor lands on the Chrome Web
+                  // Store entry, rather than every visitor landing on the
+                  // wallet's marketing /download page (the 2026-05-24
+                  // dead-end fix — see WalletInstallOption docstring and
+                  // lib/walletInstallLinks.ts file-top WTF).
+                  href={getWalletInstallUrl(opt.name)}
                   target="_blank"
                   rel="noreferrer"
                   className="flex items-start gap-3 rounded-xl border border-panel bg-panel/40 px-4 py-3 text-left transition hover:border-accent/60 hover:bg-panel/70"
                 >
-                  {/* Always an inline data URL — see WalletInstallOption.iconDataUrl
-                      contract above for why we never load from a CDN. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={opt.iconDataUrl}
-                    alt=""
-                    className="mt-0.5 h-7 w-7 rounded"
-                    width={28}
-                    height={28}
-                  />
+                  {/* Inline-SVG JSX, not <img src=data:url>. See
+                      `components/WalletBrandIcon.tsx` for why: in real
+                      Safari and Chrome reports the data-URL pipeline
+                      rendered the broken-image glyph while inline JSX
+                      worked. Tailwind `mt-0.5 h-7 w-7` matches the prior
+                      image size; the component handles its own rounding. */}
+                  <WalletBrandIcon name={opt.name} className="mt-0.5 h-7 w-7" />
                   <span className="flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-text">Install {opt.name}</span>
@@ -325,6 +392,16 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
             one flow. Phantom and Backpack require you to create the wallet INSIDE the
             extension first, before any site can connect.
           </p>
+
+          {/*
+            Five-step setup walkthrough — kept always-visible (not gated on
+            `detected.length === 0`) because the second-most-common failure
+            we see is "I installed Phantom, the picker shows it as Detected,
+            but clicking it does nothing." That failure is virtually always
+            step 3 (wallet not on Solana Devnet), and the checklist is the
+            single intervention that prevents it.
+          */}
+          <PostInstallChecklist />
 
           <p className="mt-3 text-xs text-muted">
             Already installed but not detected? Some extensions inject after the first paint —

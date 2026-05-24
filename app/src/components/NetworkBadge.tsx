@@ -25,11 +25,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { cluster } from "@/lib/cluster";
+import { WalletBrandIcon } from "@/components/WalletBrandIcon";
 import {
   BROWSER_ICONS,
   PHANTOM_AVATAR_DIAGRAM,
-  PHANTOM_ICON_DATA_URL,
-  SOLFLARE_ICON_DATA_URL,
 } from "@/lib/walletIcons";
 import {
   browserDisplayName,
@@ -356,13 +355,12 @@ export function NetworkBadge() {
               }
             >
               <span className="inline-flex items-center gap-1.5">
-                <img
-                  src={SOLFLARE_ICON_DATA_URL}
-                  alt=""
-                  width={14}
-                  height={14}
-                  className="rounded-sm"
-                />
+                {/* Inline-SVG via WalletBrandIcon, not <img src=data:url>. The
+                    same data-URL pipeline that broke the install rows on
+                    2026-05-24 (Safari + Chrome) would silently break this
+                    tab-toggle icon too; rendering inline removes the failure
+                    mode entirely. */}
+                <WalletBrandIcon name="Solflare" className="h-3.5 w-3.5" />
                 Solflare
                 {choice === "solflare" && (
                   <span className="rounded-full border border-yes/40 bg-yes/20 px-1.5 py-0.5 text-[9px] uppercase tracking-wider">
@@ -382,13 +380,8 @@ export function NetworkBadge() {
               }
             >
               <span className="inline-flex items-center gap-1.5">
-                <img
-                  src={PHANTOM_ICON_DATA_URL}
-                  alt=""
-                  width={14}
-                  height={14}
-                  className="rounded-sm"
-                />
+                {/* See sibling Solflare comment — inline SVG, not data URL. */}
+                <WalletBrandIcon name="Phantom" className="h-3.5 w-3.5" />
                 Phantom
               </span>
             </button>
