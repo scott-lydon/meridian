@@ -36,7 +36,6 @@ import {
   useWallet,
   WalletProvider as SolanaWalletProvider,
 } from "@solana/wallet-adapter-react";
-import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import {
   WalletError,
   WalletNotReadyError,
@@ -49,8 +48,13 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { cluster } from "@/lib/cluster";
 import { queryClient } from "@/lib/queryClient";
 import { WalletSetupChecklist } from "@/components/WalletSetupChecklist";
+import { WalletPickerProvider } from "@/components/WalletPickerProvider";
 
-import "@solana/wallet-adapter-react-ui/styles.css";
+// NOTE: we deliberately do NOT import @solana/wallet-adapter-react-ui or its
+// stylesheet anywhere in the tree. The default modal that ships with that
+// package dead-ends on the "no wallets detected" path (one X button, zero
+// install guidance) and the override surface is minimal. WalletPickerProvider
+// owns the connect-flow UI instead; see its file-top comment for rationale.
 
 const WATCHER_TIMEOUT_MS = 4_000;
 
@@ -214,7 +218,7 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
     <QueryClientProvider client={queryClient}>
       <ConnectionProvider endpoint={endpoint} config={connectionConfig}>
         <SolanaWalletProvider wallets={wallets} autoConnect onError={onWalletError}>
-          <WalletModalProvider>
+          <WalletPickerProvider>
             <WalletWatcher onTimeout={onWalletWatcherTimeout} />
             {walletErrorMsg && (
               <WalletErrorBanner
@@ -223,7 +227,7 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
               />
             )}
             {children}
-          </WalletModalProvider>
+          </WalletPickerProvider>
         </SolanaWalletProvider>
       </ConnectionProvider>
     </QueryClientProvider>

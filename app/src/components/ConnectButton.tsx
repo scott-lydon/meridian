@@ -1,16 +1,20 @@
 "use client";
 
 import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
 import { useUsdcBalance } from "@/hooks/useUsdcBalance";
 import { formatUsdc } from "@/lib/usdc";
+import { ConnectWalletButton } from "@/components/ConnectWalletButton";
 
 /**
- * The header's Connect Wallet button.
+ * Header connect chip: USDC balance (when connected) next to a
+ * `ConnectWalletButton`. The button itself owns the connected vs
+ * disconnected rendering and the picker-modal trigger; this wrapper just
+ * pairs it with the inline balance.
  *
- * Connected: shows truncated pubkey + USDC balance.
- * Disconnected: triggers the wallet-adapter modal.
+ * We do NOT use `WalletMultiButton` from `@solana/wallet-adapter-react-ui`
+ * because its underlying modal's no-wallets-detected state is a literal dead
+ * end. See `WalletPickerProvider.tsx` for the replacement.
  */
 export function ConnectButton() {
   const { publicKey } = useWallet();
@@ -24,7 +28,7 @@ export function ConnectButton() {
           <span className="ml-1 text-xs uppercase tracking-wider text-muted/70">USDC</span>
         </div>
       )}
-      <WalletMultiButton className="!rounded-xl !bg-accent hover:!bg-accentHover" />
+      <ConnectWalletButton />
     </div>
   );
 }

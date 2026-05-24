@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 
+import { ConnectWalletButton } from "@/components/ConnectWalletButton";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useTrade } from "@/hooks/useTrade";
@@ -462,7 +462,7 @@ export default function TradePage({
                 signature. Set your Phantom or Solflare wallet to Devnet, then click below.
                 Click the DEVNET pill in the header for click-by-click instructions for your wallet.
               </p>
-              <WalletMultiButton className="!h-10 !rounded-xl !bg-accent !text-sm hover:!bg-accentHover" />
+              <ConnectWalletButton className="h-10 text-sm" />
             </div>
           )}
 
