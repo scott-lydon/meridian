@@ -46,6 +46,12 @@ import type { ReactNode } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletReadyState, type WalletName } from "@solana/wallet-adapter-base";
 
+import {
+  PHANTOM_ICON_DATA_URL,
+  SOLFLARE_ICON_DATA_URL,
+  BACKPACK_ICON_DATA_URL,
+} from "@/lib/walletIcons";
+
 interface WalletPickerContextValue {
   /** Open the picker modal. Idempotent. */
   open: () => void;
@@ -78,8 +84,12 @@ export function useWalletPicker(): WalletPickerContextValue {
  * than discovering it at runtime because the whole point of this list is to
  * show wallets the user does NOT have yet — runtime detection returns nothing.
  *
- * Hex colors are the brand colors used by Simple Icons; we encode them in the
- * iconUrl so the picker matches the rest of the app's logo treatment.
+ * `iconDataUrl` is always an inline `data:image/svg+xml;base64,...` URL —
+ * NEVER a third-party CDN. This is enforced because cdn.simpleicons.org
+ * fetches are silently dropped by Safari's Strict tracking-prevention
+ * (the request returns 200 but the image never paints), as documented in
+ * `lib/walletIcons.ts`. The data URL ships inline with the JS bundle so
+ * the row renders identically in Safari, Chrome, Firefox, Brave, and Edge.
  *
  * `firstTimeRecommended` flags Solflare because it lets the user create the
  * wallet inside the connect popup (single flow). Phantom requires a wallet to
@@ -89,9 +99,7 @@ export function useWalletPicker(): WalletPickerContextValue {
 interface WalletInstallOption {
   name: string;
   href: string;
-  iconUrl: string | null;
-  iconLetter: string;
-  iconBg: string;
+  iconDataUrl: string;
   blurb: string;
   firstTimeRecommended?: true;
 }
@@ -100,9 +108,7 @@ const INSTALL_OPTIONS: readonly WalletInstallOption[] = [
   {
     name: "Solflare",
     href: "https://solflare.com/download",
-    iconUrl: "https://cdn.simpleicons.org/solflare/fc7a1e",
-    iconLetter: "S",
-    iconBg: "#fc7a1e",
+    iconDataUrl: SOLFLARE_ICON_DATA_URL,
     blurb:
       "Easiest first-time setup. Lets you create a wallet as part of the connect popup (one flow).",
     firstTimeRecommended: true,
@@ -110,20 +116,14 @@ const INSTALL_OPTIONS: readonly WalletInstallOption[] = [
   {
     name: "Phantom",
     href: "https://phantom.com/download",
-    iconUrl: "https://cdn.simpleicons.org/phantom/ab9ff2",
-    iconLetter: "P",
-    iconBg: "#ab9ff2",
+    iconDataUrl: PHANTOM_ICON_DATA_URL,
     blurb:
       "Most popular wallet. You must create a wallet inside the extension BEFORE clicking connect here.",
   },
   {
     name: "Backpack",
     href: "https://backpack.app/download",
-    // Simple Icons does not currently host a Backpack glyph; fall back to a
-    // brand-colored letter chip so the row still has a recognizable mark.
-    iconUrl: null,
-    iconLetter: "B",
-    iconBg: "#e33e3f",
+    iconDataUrl: BACKPACK_ICON_DATA_URL,
     blurb: "Newer wallet. Supports xNFTs.",
   },
 ];
@@ -283,23 +283,16 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
                   rel="noreferrer"
                   className="flex items-start gap-3 rounded-xl border border-panel bg-panel/40 px-4 py-3 text-left transition hover:border-accent/60 hover:bg-panel/70"
                 >
-                  {opt.iconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={opt.iconUrl}
-                      alt=""
-                      className="mt-0.5 h-7 w-7 rounded bg-white/10 p-0.5"
-                      width={28}
-                      height={28}
-                    />
-                  ) : (
-                    <span
-                      className="mt-0.5 grid h-7 w-7 place-items-center rounded text-xs font-bold text-white"
-                      style={{ backgroundColor: opt.iconBg }}
-                    >
-                      {opt.iconLetter}
-                    </span>
-                  )}
+                  {/* Always an inline data URL — see WalletInstallOption.iconDataUrl
+                      contract above for why we never load from a CDN. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={opt.iconDataUrl}
+                    alt=""
+                    className="mt-0.5 h-7 w-7 rounded"
+                    width={28}
+                    height={28}
+                  />
                   <span className="flex-1">
                     <span className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-text">Install {opt.name}</span>
