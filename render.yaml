@@ -41,12 +41,6 @@ services:
       # MERIDIAN_PROGRAM_ID: set after first devnet deploy
       # ADMIN_KEYPAIR_PATH, AUTOMATION_KEYPAIR_PATH: set as Render secret files
       # SLACK_WEBHOOK_URL: set in dashboard (optional)
-      # ADMIN_API_SECRET: set in dashboard. Required for POST
-      # /admin/create-market to function; the endpoint returns 503 when
-      # unset. Must match NEXT_PUBLIC_ADMIN_API_SECRET on the frontend
-      # service exactly. Generate with: openssl rand -hex 24
-      - key: ADMIN_API_SECRET
-        sync: false
 
   # Next.js frontend. Public devnet UI for placing trades. The admin/pass
   # gate at /admin unlocks the 🧪 DEV button + after-hours testing mode
@@ -103,13 +97,3 @@ services:
         value: 399f1e8f1c4a517859963b56f104727a7a3c7f0f8fee56d34fa1f72e5a4b78ef
       - key: NEXT_PUBLIC_PYTH_FEED_TSLA
         value: 42676a595d0099c381687124805c8bb22c75424dffcaa55e3dc6549854ebe20a
-      # NEXT_PUBLIC_ADMIN_API_SECRET: shared secret echoed back to the
-      # automation server's /admin/create-market endpoint in the
-      # x-admin-secret header. Must match ADMIN_API_SECRET on the
-      # automation service exactly. Inlined into the client bundle at
-      # build time (that's the NEXT_PUBLIC_ prefix's effect). NOT a
-      # security boundary because the value is visible in the bundle;
-      # the real boundary is the on-chain `address = config.admin`
-      # check on create_strike_market. Set in dashboard.
-      - key: NEXT_PUBLIC_ADMIN_API_SECRET
-        sync: false

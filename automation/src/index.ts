@@ -320,16 +320,27 @@ const server = http.createServer((req, res) => {
   //
   // POST /admin/create-market with JSON body
   //   { ticker: "AAPL", strikeUsd: 309, expirySecondsFromNow: 120 }
-  // and header x-admin-secret: <ADMIN_API_SECRET>.
+  // and headers
+  //   x-admin-username: admin
+  //   x-admin-password: pass
+  //
+  // The username/password pair reuses the existing /admin sign-in
+  // credentials hardcoded on the frontend in app/src/lib/adminMode.ts.
+  // Same values, same posture, same "not a real security boundary"
+  // rationale: the credentials are visible in the client bundle on
+  // purpose. The actual boundary is the on-chain
+  // `address = config.admin` check on create_strike_market. This
+  // header pair exists to make casual /admin/* probes from random
+  // visitors return 401 instead of triggering on-chain admin work.
   //
   // CORS preflight is supported so the Next.js frontend can call this
-  // from the browser (browsers preflight any POST with non-simple headers
-  // like x-admin-secret).
+  // from the browser (browsers preflight any POST with non-simple
+  // headers like x-admin-username).
   if (req.url === "/admin/create-market" && req.method === "OPTIONS") {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "POST, OPTIONS",
-      "access-control-allow-headers": "content-type, x-admin-secret",
+      "access-control-allow-headers": "content-type, x-admin-username, x-admin-password",
       "access-control-max-age": "600",
     });
     res.end();
@@ -358,13 +369,28 @@ const server = http.createServer((req, res) => {
 });
 
 /**
+ * Hardcoded admin credentials. SOURCE OF TRUTH for the frontend side is
+ * app/src/lib/adminMode.ts (ADMIN_USERNAME / ADMIN_PASSWORD). The two
+ * sides are kept in sync manually because the automation server and the
+ * Next.js app are in separate workspaces; if you change one side, change
+ * the other in the same commit.
+ *
+ * NOT a security boundary. These are visible in the client bundle on
+ * purpose. See app/src/lib/adminMode.ts for the rationale. The actual
+ * boundary is the on-chain `address = config.admin` check on
+ * create_strike_market — only the admin keypair (held by this
+ * automation server, never by the browser) can sign that instruction.
+ */
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "pass";
+
+/**
  * Handle POST /admin/create-market. Streams the body, parses, authorizes,
  * runs the on-chain create+init flow, returns a JSON result the frontend
  * can use to redirect the admin to the new trade page.
  *
  * Error mapping:
- *   - missing/empty ADMIN_API_SECRET env -> 503 (server not configured)
- *   - missing/wrong x-admin-secret header -> 401
+ *   - missing/wrong x-admin-username + x-admin-password headers -> 401
  *   - invalid JSON body or missing fields -> 400
  *   - CreateCustomMarketError.code starting with INVALID_ -> 400
  *   - CreateCustomMarketError.code CONFIG_MISSING -> 503
@@ -387,23 +413,20 @@ async function handleCreateMarket(
   };
 
   // ===== Auth gate. =====
-  if (!env.ADMIN_API_SECRET) {
-    return send(503, {
-      error: "admin_api_secret_unset",
-      message:
-        "ADMIN_API_SECRET env var is not set on the automation server. " +
-        "Set it to a strong shared secret and restart, then set the matching " +
-        "NEXT_PUBLIC_ADMIN_API_SECRET on the frontend.",
-    });
-  }
-  const supplied = req.headers["x-admin-secret"];
-  const suppliedStr = Array.isArray(supplied) ? supplied[0] : supplied;
-  if (!suppliedStr || suppliedStr !== env.ADMIN_API_SECRET) {
+  // Reuses the same admin/pass credentials the /admin sign-in form on
+  // the frontend already uses. No env vars, no shared secret to set in
+  // Render — works out of the box, matching the existing pattern.
+  const headerUser = req.headers["x-admin-username"];
+  const headerPass = req.headers["x-admin-password"];
+  const username = Array.isArray(headerUser) ? headerUser[0] : headerUser;
+  const password = Array.isArray(headerPass) ? headerPass[0] : headerPass;
+  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
     return send(401, {
       error: "unauthorized",
       message:
-        "missing or invalid x-admin-secret header. The header value must " +
-        "match the ADMIN_API_SECRET env var on the automation server.",
+        "missing or invalid x-admin-username + x-admin-password headers. " +
+        "Sign in at /admin on the frontend first; the page picks up the " +
+        "credentials from localStorage and includes them automatically.",
     });
   }
 

@@ -40,17 +40,6 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   SLACK_WEBHOOK_URL: z.string().url().optional(),
   TZ: z.string().default("America/New_York"),
-  // Shared secret required by admin-only HTTP endpoints on the automation
-  // server (/admin/create-market and friends). The frontend reads the same
-  // value from NEXT_PUBLIC_ADMIN_API_SECRET and includes it as the
-  // x-admin-secret request header. Optional at boot so a local dev server
-  // can still come up; the endpoints themselves return 503 when the
-  // secret is not configured. NOT a real security boundary on devnet —
-  // it exists to make casual /admin/* probes from random visitors return
-  // 401 instead of triggering on-chain admin work. See
-  // app/src/lib/adminMode.ts for the matching "not a security boundary"
-  // note on the localStorage flag side.
-  ADMIN_API_SECRET: z.string().min(8).optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

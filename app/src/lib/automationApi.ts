@@ -9,13 +9,15 @@
 //   - POST /admin/create-market (this module) — wraps the admin-only
 //     create_strike_market + init_order_book flow on devnet.
 //
-// The shared secret model is intentionally lightweight. The
-// NEXT_PUBLIC_ADMIN_API_SECRET value is baked into the client bundle, so
-// anyone who views the source can extract it. That matches the existing
-// /admin sign-in pattern (lib/adminMode.ts) which also commits the
-// admin/pass credentials into the client bundle. The actual security
-// boundary is the on-chain `address = config.admin` check; this header
-// just keeps casual probes off the endpoint.
+// Auth: reuses the admin/pass credentials from lib/adminMode.ts (the
+// same constants that gate the /admin sign-in form). The client sends
+// them as x-admin-username + x-admin-password headers. NOT a real
+// security boundary — credentials are visible in the client bundle on
+// purpose. The actual boundary is the on-chain `address = config.admin`
+// check on create_strike_market; only the admin keypair held by the
+// automation server can sign that instruction.
+
+import { ADMIN_PASSWORD, ADMIN_USERNAME } from "@/lib/adminMode";
 
 /**
  * Base URL for the deployed automation server. Hardcoded for parity with
@@ -24,16 +26,6 @@
  * be invisible churn since the URL is the only deployment we have.
  */
 export const AUTOMATION_BASE_URL = "https://meridian-automation.onrender.com";
-
-/**
- * Shared secret echoed back to the automation server in the
- * `x-admin-secret` request header. Read from NEXT_PUBLIC_* env at build
- * time so Next.js inlines it into the client bundle. Undefined when the
- * env var is unset — the server returns 503 in that case, surfacing the
- * misconfiguration loudly instead of silently 401-ing.
- */
-export const ADMIN_API_SECRET: string | undefined =
-  process.env.NEXT_PUBLIC_ADMIN_API_SECRET;
 
 /**
  * Input shape for POST /admin/create-market. Mirrors the server-side
@@ -88,22 +80,14 @@ export class AutomationApiError extends Error {
 export async function postCreateMarket(
   input: CreateMarketInput,
 ): Promise<CreateMarketResult> {
-  if (!ADMIN_API_SECRET) {
-    throw new AutomationApiError(
-      0,
-      "frontend_secret_unset",
-      "NEXT_PUBLIC_ADMIN_API_SECRET is not set on the frontend; this build " +
-        "cannot call /admin/create-market. Set it on the frontend Render " +
-        "service and redeploy.",
-    );
-  }
   let res: Response;
   try {
     res = await fetch(`${AUTOMATION_BASE_URL}/admin/create-market`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-admin-secret": ADMIN_API_SECRET,
+        "x-admin-username": ADMIN_USERNAME,
+        "x-admin-password": ADMIN_PASSWORD,
       },
       body: JSON.stringify(input),
       signal: AbortSignal.timeout(60_000),
