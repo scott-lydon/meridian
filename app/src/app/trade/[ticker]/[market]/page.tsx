@@ -15,6 +15,13 @@ import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 import { marketUiState } from "@/lib/marketSession";
 import { useAfterHoursMode } from "@/lib/afterHoursMode";
+import { cluster } from "@/lib/cluster";
+import { useAdminMode } from "@/lib/adminMode";
+import {
+  AutomationApiError,
+  postSettleMarket,
+  type SettleMarketResult,
+} from "@/lib/automationApi";
 
 function useCountdown(toUnix: number | undefined): string {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -123,6 +130,14 @@ export default function TradePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [lastSig, setLastSig] = useState<string | null>(null);
   const [lastErr, setLastErr] = useState<string | null>(null);
+  // Admin-only force-settle UI state. Kept distinct from the trade
+  // `busy` / `lastSig` / `lastErr` triplet because settle is a separate
+  // surface (admin server endpoint, not the user's wallet) and mixing
+  // them would conflate user-facing trade toasts with admin debug toasts.
+  const adminMode = useAdminMode();
+  const [settleBusy, setSettleBusy] = useState(false);
+  const [settleResult, setSettleResult] = useState<SettleMarketResult | null>(null);
+  const [settleErr, setSettleErr] = useState<string | null>(null);
   // Predicted balance delta for the most recent action ("+3 YES, +3 NO,
   // −$3 USDC"). Buttons set this when calling `run` so the confirmation
   // toast can tell the user exactly what changed, instead of forcing them
@@ -511,11 +526,112 @@ export default function TradePage({
               <p className="text-muted">
                 This market is past its 16:00 ET expiry. The settle cron runs at 16:05 ET and reads
                 the on-chain Pyth feed to set the outcome; admin_settle is the fallback if Pyth is
-                stale beyond 60 minutes. Existing positions are safe and will be redeemable once
-                the outcome is recorded. New orders and pair mints are blocked client-side until
-                then (the on-chain program does not yet enforce the expiry gate, so a sufficiently
-                determined wallet could bypass this UI — tracked in tasks.md).
+                stale beyond 60 minutes. The 30-second expiry-sweep cron picks up custom (non-daily-
+                ladder) markets at any time, including weekends and US market holidays. Existing
+                positions are safe and will be redeemable once the outcome is recorded. New orders
+                and pair mints are blocked client-side until then (the on-chain program does not yet
+                enforce the expiry gate, so a sufficiently determined wallet could bypass this UI —
+                tracked in tasks.md).
               </p>
+              {/* Admin-only force-settle. Surfaces when the auto-sweep cron is
+                  stale (most often: the deployed automation Render service is
+                  on an older commit that lacks the expiry-sweep job, or both
+                  the Pyth path AND settle_market_manual fallback have been
+                  failing since expiry). The on-chain admin keypair lives on
+                  the automation server; this button POSTs to its
+                  /admin/settle-market endpoint, which signs Pyth-primary then
+                  settle_market_manual-fallback the same way the sweep would.
+                  Result/error rendered immediately below so the admin can
+                  copy the explorer link or read the failure verbatim. */}
+              {adminMode && m && m.outcome === "Pending" && (
+                <div className="mt-3 border-t border-accent/20 pt-2">
+                  <button
+                    type="button"
+                    disabled={settleBusy}
+                    onClick={async () => {
+                      setSettleBusy(true);
+                      setSettleErr(null);
+                      setSettleResult(null);
+                      try {
+                        const result = await postSettleMarket({ marketPubkey: market });
+                        setSettleResult(result);
+                        // Trigger an immediate market+balance refetch so the
+                        // banner flips from awaiting-settle to settled
+                        // without waiting for the React Query interval.
+                        // Prefix-match on ["markets"] because the per-day
+                        // key is ["markets", tradingDay] and we do not
+                        // know the trading-day value here. React Query
+                        // matches on prefix when given a partial key.
+                        void queryClient.invalidateQueries({
+                          queryKey: ["markets"],
+                        });
+                        void queryClient.invalidateQueries({
+                          queryKey: queryKeys.market(market),
+                        });
+                      } catch (err) {
+                        if (err instanceof AutomationApiError) {
+                          setSettleErr(
+                            `Settle failed [${err.slug} / HTTP ${err.status}]: ${err.message}`,
+                          );
+                        } else {
+                          setSettleErr(
+                            err instanceof Error ? err.message : String(err),
+                          );
+                        }
+                      } finally {
+                        setSettleBusy(false);
+                      }
+                    }}
+                    className="w-full rounded-lg border border-accent/50 bg-accent/20 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    title="Calls the automation server's /admin/settle-market endpoint, which signs settle_market (Pyth) or settle_market_manual (fallback) with the on-chain admin keypair."
+                  >
+                    {settleBusy
+                      ? "Settling — posting Pyth price-update + settle ix..."
+                      : "Force-settle this market now (admin)"}
+                  </button>
+                  {settleResult && (
+                    <div className="mt-2 rounded-md border border-yes/40 bg-yes/10 p-2 text-[11px]">
+                      <p className="font-semibold text-yes">
+                        Settled via {settleResult.settledVia === "pyth" ? "Pyth on-chain" : "settle_market_manual (Hermes last-known)"}.
+                      </p>
+                      <p className="mt-0.5 font-mono text-text">
+                        Closing price: ${(Number(settleResult.closingPriceMicros) / 1_000_000).toFixed(6)}
+                      </p>
+                      <p className="mt-0.5">
+                        <a
+                          className="text-accent underline"
+                          href={`https://explorer.solana.com/tx/${settleResult.sig}?cluster=${cluster.name}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View settle tx on Solana Explorer →
+                        </a>
+                      </p>
+                      <p className="mt-1 text-muted">
+                        Reload the page to see the won-yes / won-no banner and the asymmetric Redeem button on /portfolio.
+                      </p>
+                    </div>
+                  )}
+                  {settleErr && (
+                    <p className="mt-2 break-words rounded-md border border-no/40 bg-no/10 p-2 text-[11px] text-no">
+                      {settleErr}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[10px] text-muted">
+                    For users: minting a pair (above) deposits $1.00 USDC and gives you 1 YES + 1 NO.
+                    To mint, you need devnet USDC — Redeem hint links to{" "}
+                    <a
+                      className="text-accent underline"
+                      href={cluster.faucetUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      the Circle faucet
+                    </a>
+                    .
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {/* Trade buttons.
@@ -724,19 +840,52 @@ export default function TradePage({
                 : wantsMore
                   ? `Only ${pairBalNum} pair${pairBalNum === 1 ? "" : "s"} available (limited by the smaller of your YES / NO balance).`
                   : "";
+            // "Get more" affordance: surfaced ONLY in the no-pair / want-more
+            // cases (settled markets redirect to Portfolio instead). On
+            // devnet the path to a redeemable pair is: devnet USDC from the
+            // Circle faucet → Mint Pair on this same page. On mainnet there
+            // is no faucet — the user has to fund the wallet from an
+            // off-ramp / exchange, so we link to a dedicated /onramp page
+            // (which today does not exist; pending mainnet bring-up the link
+            // surfaces the intent so users have a single discoverable next
+            // step instead of guessing). The cluster.name switch keeps the
+            // copy honest — never advertise a faucet on a mainnet build.
+            const showGetMore = !isSettled && (pairBal === 0n || wantsMore);
+            const onDevnet = cluster.name === "devnet";
+            const getMoreHref = onDevnet ? cluster.faucetUrl : "/onramp";
+            const getMoreLabel = onDevnet
+              ? "Get devnet USDC from the faucet, then Mint Pair above →"
+              : "Add USDC to your wallet, then Mint Pair above →";
             return (
-              <button
-                disabled={redeemDisabled}
-                onClick={() =>
-                  run("Redeem Pair", () => trade.redeemPair(qty), `−${qty} YES, −${qty} NO, +$${qty}.00 USDC`)
-                }
-                className="mt-2 w-full rounded-lg border border-accent/40 bg-panel px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-                title={settledHint}
-              >
-                {busy === "Redeem Pair"
-                  ? "..."
-                  : `Redeem ${qty} pair → $${qty}.00 USDC (you have ${pairBalNum} redeemable)`}
-              </button>
+              <>
+                <button
+                  disabled={redeemDisabled}
+                  onClick={() =>
+                    run("Redeem Pair", () => trade.redeemPair(qty), `−${qty} YES, −${qty} NO, +$${qty}.00 USDC`)
+                  }
+                  className="mt-2 w-full rounded-lg border border-accent/40 bg-panel px-3 py-2 text-sm font-semibold text-accent hover:bg-accent/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                  title={settledHint}
+                >
+                  {busy === "Redeem Pair"
+                    ? "..."
+                    : `Redeem ${qty} pair → $${qty}.00 USDC (you have ${pairBalNum} redeemable)`}
+                </button>
+                {showGetMore && (
+                  <a
+                    href={getMoreHref}
+                    target={onDevnet ? "_blank" : undefined}
+                    rel={onDevnet ? "noreferrer" : undefined}
+                    className="mt-1 block text-right text-[11px] text-accent underline decoration-accent/40 underline-offset-2 hover:text-accentHover"
+                    title={
+                      onDevnet
+                        ? "Opens the Circle devnet USDC faucet in a new tab. Paste your wallet address, request USDC, then come back and Mint Pair."
+                        : "Add USDC to your wallet, then Mint Pair to create redeemable pairs."
+                    }
+                  >
+                    {getMoreLabel}
+                  </a>
+                )}
+              </>
             );
           })()}
 

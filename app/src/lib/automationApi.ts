@@ -73,6 +73,107 @@ export class AutomationApiError extends Error {
 }
 
 /**
+ * Input shape for POST /admin/settle-market. Mirrors the server-side
+ * SettleOneMarketInput in automation/src/jobs/settleOneMarket.ts; if you
+ * change one side, change both.
+ */
+export interface SettleMarketInput {
+  /** Base58-encoded Solana account address of the Market PDA to settle. */
+  readonly marketPubkey: string;
+}
+
+/**
+ * Success-shape response from POST /admin/settle-market. Mirrors
+ * SettleOneMarketResult on the backend.
+ */
+export interface SettleMarketResult {
+  readonly marketPubkey: string;
+  readonly ticker: string;
+  /** Which path succeeded — Pyth on-chain primary OR settle_market_manual fallback. */
+  readonly settledVia: "pyth" | "manual";
+  readonly sig: string;
+  /**
+   * Closing price in USDC base units (micros). The trade page divides by
+   * 1_000_000 to display the human-readable dollar amount the on-chain
+   * outcome was resolved against.
+   */
+  readonly closingPriceMicros: string;
+}
+
+/**
+ * Call POST /admin/settle-market for a single Market PDA. Used by the
+ * trade page's "Settle this market now (admin)" button when the auto-
+ * sweep cron is stale or has failed to pick up a past-expiry market.
+ *
+ * Error shape: throws AutomationApiError with one of these slugs:
+ *   - "network" (0): the automation server is unreachable.
+ *   - "non_json_response" (any): the server returned non-JSON (502 from
+ *     Render, captive portal, etc.).
+ *   - "unauthorized" (401): admin/pass headers are missing or wrong.
+ *   - "market_not_found" (404): no Market account at that pubkey on the
+ *     configured cluster, or the pubkey is not valid base58.
+ *   - "market_already_settled" (409): another path settled it first;
+ *     the trade page should refresh to see the on-chain outcome.
+ *   - "unknown_ticker" (422): the market's ticker is not in MAG7_TICKERS,
+ *     so no Pyth feed is configured for it.
+ *   - "settle_failed" (502): both Pyth and manual paths failed; the
+ *     message contains the underlying RPC/Pyth error.
+ *   - "unexpected" (500): programmer bug; the message is verbatim.
+ */
+export async function postSettleMarket(
+  input: SettleMarketInput,
+): Promise<SettleMarketResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${AUTOMATION_BASE_URL}/admin/settle-market`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-username": ADMIN_USERNAME,
+        "x-admin-password": ADMIN_PASSWORD,
+      },
+      body: JSON.stringify(input),
+      // 60s timeout — a Pyth settle attempt can post a price-update tx +
+      // settle tx; on a slow devnet that totals ~30-40s. 60s gives
+      // headroom without becoming a hung-promise lifetime.
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new AutomationApiError(
+      0,
+      "network",
+      `failed to reach the automation server at ${AUTOMATION_BASE_URL}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new AutomationApiError(
+      res.status,
+      "non_json_response",
+      `automation server returned HTTP ${res.status} with a non-JSON body: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (!res.ok) {
+    const slug =
+      typeof body === "object" && body !== null && "error" in body
+        ? String((body as { error: unknown }).error)
+        : "unknown";
+    const message =
+      typeof body === "object" && body !== null && "message" in body
+        ? String((body as { message: unknown }).message)
+        : `HTTP ${res.status}`;
+    throw new AutomationApiError(res.status, slug, message);
+  }
+  return body as SettleMarketResult;
+}
+
+/**
  * Call POST /admin/create-market. Throws AutomationApiError on any non-2xx
  * with the server-provided slug + message; throws plain Error for
  * network failures and shape mismatches.
