@@ -30,6 +30,41 @@
     pre, code { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
     nav a.nav-link { color: var(--muted); }
     nav a.nav-link:hover { color: var(--text); }
+
+    /* Storage walkthrough cards */
+    .bucket {
+      background: var(--panel-2);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      transition: box-shadow 0.2s, border-color 0.2s;
+    }
+    .bucket-changed {
+      border-color: rgba(99, 102, 241, 0.6) !important;
+      box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.35), 0 0 36px rgba(99, 102, 241, 0.12);
+    }
+    .bucket-title { color: #e2e8f0; font-weight: 600; font-size: 0.95rem; }
+    .bucket-sub { color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.75rem; }
+    .bucket-row { display: flex; align-items: center; justify-content: space-between; padding: 0.2rem 0; font-size: 0.875rem; }
+    .bucket-label { color: #cbd5e1; display: flex; align-items: center; gap: 0.5rem; }
+    .bucket-val { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; color: #e2e8f0; }
+    .bucket-val.bucket-val-changed { color: #a5b4fc; font-weight: 600; }
+    .bucket-prev { color: #64748b; font-size: 0.72rem; margin-left: 0.4rem; }
+    .dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 9999px; }
+    .dot-yes { background: #10b981; }
+    .dot-no { background: #ef4444; }
+    .dot-usdc { background: #6366f1; }
+    .book-list { font-size: 0.75rem; font-family: ui-monospace, monospace; color: #94a3b8; }
+    .book-list .new { color: #a5b4fc; font-weight: 600; }
+    .book-list .empty { color: #475569; font-style: italic; }
+    .moved-strip {
+      background: rgba(99, 102, 241, 0.08);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      border-radius: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.8rem;
+      color: #c7d2fe;
+    }
   </style>
 </head>
 <body class="min-h-screen">
@@ -40,6 +75,7 @@
         <a class="nav-link" href="#topology">Topology</a>
         <a class="nav-link" href="#components">Components</a>
         <a class="nav-link" href="#flow">Data flow</a>
+        <a class="nav-link" href="#storage">Storage walkthrough</a>
         <a class="nav-link" href="#decisions">Decisions</a>
         <a class="nav-link" href="#tradeoffs">Trade-offs</a>
         <a class="nav-link" href="#stack">Stack</a>
@@ -198,6 +234,73 @@ sequenceDiagram
     </div>
   </section>
 
+  <!-- Storage walkthrough -->
+  <section id="storage" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">Storage walkthrough</h2>
+    <p class="mb-6 max-w-3xl text-slate-400">
+      Where every YES, NO, and dollar lives at each step. Three wallets and three program PDAs. A glowing border means the bucket changed this step. Inline arrows like <span class="font-mono text-indigo-300">$0.40 ← $1.00</span> show the previous value.
+    </p>
+
+    <!-- Legend -->
+    <div class="panel p-4 mb-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+      <div class="flex items-center gap-2"><span class="dot dot-yes"></span><span class="text-slate-300">YES token · pays $1 if YES wins</span></div>
+      <div class="flex items-center gap-2"><span class="dot dot-no"></span><span class="text-slate-300">NO token · pays $1 if NO wins</span></div>
+      <div class="flex items-center gap-2"><span class="dot dot-usdc"></span><span class="text-slate-300">USDC ($)</span></div>
+      <div class="flex items-center gap-2">
+        <span class="inline-block w-3 h-3 rounded" style="border:1px solid rgba(99,102,241,0.6); box-shadow:0 0 8px rgba(99,102,241,0.4);"></span>
+        <span class="text-slate-300">Changed this step</span>
+      </div>
+    </div>
+
+    <div id="storage-steps" class="space-y-6"></div>
+
+    <h3 class="mt-12 mb-3 text-2xl font-semibold">Step 5 · Resolution (two endings)</h3>
+    <p class="mb-6 max-w-3xl text-slate-400">
+      Same starting state (after step 4). The oracle posts an outcome. Winning side redeems against the vault 1:1. Losing side becomes worthless dust.
+    </p>
+    <div id="storage-resolution" class="grid gap-6 lg:grid-cols-2"></div>
+
+    <h3 class="mt-14 mb-3 text-2xl font-semibold">How the price gets set</h3>
+    <p class="mb-6 max-w-3xl text-slate-400">Three layers, simplest to deepest. All three are simultaneously true.</p>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Mechanical</div>
+        <p class="text-sm text-slate-300">
+          Price = the last fill on the CLOB. With no recent fill, mid price = (best bid + best ask) / 2. Orders match by price-time priority: better price first, earlier order first at the same price.
+        </p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Probabilistic</div>
+        <p class="text-sm text-slate-300">
+          A YES token pays $1 if YES wins and $0 otherwise, so its expected value is the probability of winning. In a rational market, YES_price in dollars equals the implied probability. <span class="font-mono pill-yes rounded px-1.5">$0.60</span> means the market thinks YES has about 60% odds.
+        </p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Arbitrage</div>
+        <p class="text-sm text-slate-300">
+          YES + NO stays close to $1 because anyone can mint a pair from the vault for $1 and anyone holding a pair can redeem for $1. If the books drift below or above $1, arbitrageurs pull them back. The vault is what ties the two independent CLOBs together.
+        </p>
+      </div>
+    </div>
+
+    <div class="panel p-6 mt-6">
+      <div class="mb-3 text-xs font-semibold uppercase tracking-wider text-indigo-300">The arbitrage loop, drawn</div>
+      <pre class="mermaid">
+flowchart LR
+  Books["YES book + NO book<br/>(market quotes)"]
+  Sum{{"YES_price + NO_price<br/>vs $1.00"}}
+  Below["sum &lt; $1<br/>(books cheap)"]
+  Above["sum &gt; $1<br/>(books rich)"]
+  BuyBoth["Arb buys both sides<br/>then redeems for $1"]
+  MintSell["Arb mints pair for $1<br/>then sells both sides"]
+  Pulled["Books pulled back<br/>toward $1"]
+  Books --> Sum
+  Sum -->|below| Below --> BuyBoth --> Pulled --> Books
+  Sum -->|above| Above --> MintSell --> Pulled
+      </pre>
+    </div>
+  </section>
+
   <!-- Decisions -->
   <section id="decisions" class="mx-auto max-w-6xl px-6 py-12">
     <h2 class="mb-2 text-3xl font-bold">Decisions</h2>
@@ -287,6 +390,232 @@ sequenceDiagram
     </div>
     <p class="mt-4">Devnet only · No regulatory or compliance claims · Not financial advice.</p>
   </footer>
+
+  <script>
+    // Storage walkthrough — data + renderers
+    const STEPS = [
+      {
+        n: 0,
+        headline: "Setup · John mints 1 pair for $1",
+        why: "John transfers $1 USDC into the market vault. The program mints 1 YES + 1 NO into John's wallet ATAs. Pairs outstanding: 1. Kerry and Bob start with $1 each, untouched.",
+        state: {
+          john:    { yes: 1, no: 1, usdc: 0.00, sub: "Initial minter", before: { yes: 0, no: 0, usdc: 1.00 } },
+          kerry:   { yes: 0, no: 0, usdc: 1.00, sub: "Will buy YES" },
+          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Will buy NO" },
+          vault:   { usdc: 1.00, pairs: 1, before: { usdc: 0.00, pairs: 0 } },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+        }
+      },
+      {
+        n: 1,
+        headline: "Kerry bids · buy 1 YES at 60¢",
+        why: "Kerry's $0.60 moves from her USDC ATA into the YES CLOB's quote escrow vault. A bid entry appears in the YES bids book. No tokens move yet. If she cancels now, the $0.60 returns to her wallet.",
+        state: {
+          john:    { yes: 1, no: 1, usdc: 0.00, sub: "Initial minter" },
+          kerry:   { yes: 0, no: 0, usdc: 0.40, sub: "Bid open", before: { usdc: 1.00 } },
+          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
+          vault:   { usdc: 1.00, pairs: 1 },
+          yesClob: { bids: [{ owner: "Kerry", price: 60, qty: 1, isNew: true }], asks: [], qv: 0.60, bv: 0, before: { qv: 0.00 } },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+        }
+      },
+      {
+        n: 2,
+        headline: "YES match · John sells 1 YES at 60¢, Kerry's bid fills",
+        why: "John's 1 YES routes through the YES CLOB's base vault and out to Kerry's YES ATA. The $0.60 in escrow routes to John's USDC ATA. Book clears. Market vault and outstanding pairs are untouched, because no pair was minted or redeemed.",
+        state: {
+          john:    { yes: 0, no: 1, usdc: 0.60, sub: "Sold YES", before: { yes: 1, usdc: 0.00 } },
+          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Got YES", before: { yes: 0 } },
+          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
+          vault:   { usdc: 1.00, pairs: 1 },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0, before: { qv: 0.60 } },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+        }
+      },
+      {
+        n: 3,
+        headline: "Bob bids · buy 1 NO at 35¢",
+        why: "Bob's $0.35 moves from his USDC ATA into the NO CLOB's quote escrow vault. A bid entry appears in the NO bids book.",
+        state: {
+          john:    { yes: 0, no: 1, usdc: 0.60, sub: "Holding NO" },
+          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Holding YES" },
+          bob:     { yes: 0, no: 0, usdc: 0.65, sub: "Bid open", before: { usdc: 1.00 } },
+          vault:   { usdc: 1.00, pairs: 1 },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
+          noClob:  { bids: [{ owner: "Bob", price: 35, qty: 1, isNew: true }], asks: [], qv: 0.35, bv: 0, before: { qv: 0.00 } }
+        }
+      },
+      {
+        n: 4,
+        headline: "NO match · John sells 1 NO at 35¢, John fully exits",
+        why: "John's 1 NO routes through the NO CLOB's base vault to Bob. $0.35 routes to John, bringing him to $0.95 total. John has now fully exited his $1 mint for $0.95: the $0.05 spread is what the market priced into the pair.",
+        state: {
+          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Flat", before: { no: 1, usdc: 0.60 } },
+          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Holding YES" },
+          bob:     { yes: 0, no: 1, usdc: 0.65, sub: "Got NO", before: { no: 0 } },
+          vault:   { usdc: 1.00, pairs: 1 },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0, before: { qv: 0.35 } }
+        }
+      }
+    ];
+
+    const RESOLUTIONS = [
+      {
+        n: "5a",
+        headline: "NO wins · Bob redeems",
+        why: "Oracle posts NO as the winning outcome. Bob calls redeem: 1 NO burns, $1.00 USDC transfers out of the market vault to his ATA. Kerry's 1 YES is now worthless dust.",
+        sum: "Final P&L · John −$0.05 · Kerry −$0.60 · Bob +$0.65 · sum = $3.00, equal to the $3.00 the three started with. Zero-sum.",
+        state: {
+          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Closed (−$0.05)" },
+          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "YES is worthless", note: "1 YES = worthless dust" },
+          bob:     { yes: 0, no: 0, usdc: 1.65, sub: "Winner (+$0.65)", before: { no: 1, usdc: 0.65 } },
+          vault:   { usdc: 0.00, pairs: 0, before: { usdc: 1.00, pairs: 1 } },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+        }
+      },
+      {
+        n: "5b",
+        headline: "YES wins · Kerry redeems",
+        why: "Oracle posts YES as the winning outcome. Kerry calls redeem: 1 YES burns, $1.00 USDC transfers out of the market vault to her ATA. Bob's 1 NO is now worthless dust.",
+        sum: "Final P&L · John −$0.05 · Kerry +$0.40 · Bob −$0.35 · sum = $3.00, equal to the $3.00 the three started with. Zero-sum.",
+        state: {
+          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Closed (−$0.05)" },
+          kerry:   { yes: 0, no: 0, usdc: 1.40, sub: "Winner (+$0.40)", before: { yes: 1, usdc: 0.40 } },
+          bob:     { yes: 0, no: 1, usdc: 0.65, sub: "NO is worthless", note: "1 NO = worthless dust" },
+          vault:   { usdc: 0.00, pairs: 0, before: { usdc: 1.00, pairs: 1 } },
+          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
+          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+        }
+      }
+    ];
+
+    // --- renderers ---
+    const money = (n) => "$" + n.toFixed(2);
+
+    function row(label, dotClass, valStr, prevStr) {
+      const isChanged = prevStr !== null && prevStr !== undefined;
+      const valCls = isChanged ? "bucket-val bucket-val-changed" : "bucket-val";
+      const prevHtml = isChanged ? `<span class="bucket-prev">← ${prevStr}</span>` : "";
+      return `<div class="bucket-row">
+        <span class="bucket-label"><span class="dot ${dotClass}"></span>${label}</span>
+        <span class="${valCls}">${valStr}${prevHtml}</span>
+      </div>`;
+    }
+
+    function plainRow(label, valStr, prevStr) {
+      const isChanged = prevStr !== null && prevStr !== undefined;
+      const valCls = isChanged ? "bucket-val bucket-val-changed" : "bucket-val";
+      const prevHtml = isChanged ? `<span class="bucket-prev">← ${prevStr}</span>` : "";
+      return `<div class="bucket-row">
+        <span class="bucket-label">${label}</span>
+        <span class="${valCls}">${valStr}${prevHtml}</span>
+      </div>`;
+    }
+
+    function walletCard(name, s) {
+      const changed = !!s.before;
+      const prev = s.before || {};
+      const yesPrev = "yes" in prev ? prev.yes : null;
+      const noPrev  = "no"  in prev ? prev.no  : null;
+      const usdcPrev = "usdc" in prev ? money(prev.usdc) : null;
+      return `<div class="bucket ${changed ? "bucket-changed" : ""}">
+        <div class="bucket-title">${name}</div>
+        <div class="bucket-sub">${s.sub || ""}</div>
+        ${row("YES",  "dot-yes",  s.yes,        yesPrev)}
+        ${row("NO",   "dot-no",   s.no,         noPrev)}
+        ${row("USDC", "dot-usdc", money(s.usdc), usdcPrev)}
+        ${s.note ? `<div class="mt-2 text-xs" style="color:#f87171;font-style:italic">${s.note}</div>` : ""}
+      </div>`;
+    }
+
+    function vaultCard(s) {
+      const changed = !!s.before;
+      const prev = s.before || {};
+      return `<div class="bucket ${changed ? "bucket-changed" : ""}">
+        <div class="bucket-title">Market vault</div>
+        <div class="bucket-sub">PDA · collateral bank</div>
+        ${row("USDC", "dot-usdc", money(s.usdc), "usdc" in prev ? money(prev.usdc) : null)}
+        ${plainRow("Pairs outstanding", s.pairs, "pairs" in prev ? prev.pairs : null)}
+      </div>`;
+    }
+
+    function clobCard(name, side, s) {
+      const hasNewOrder = (s.bids || []).some(o => o.isNew) || (s.asks || []).some(o => o.isNew);
+      const changed = !!s.before || hasNewOrder;
+      const prev = s.before || {};
+      const renderOrders = (list) => list.length === 0
+        ? `<div class="book-list empty">(empty)</div>`
+        : list.map(o => `<div class="book-list ${o.isNew ? "new" : ""}">${o.owner} · ${o.price}¢ · ${o.qty}${o.isNew ? "  ← new" : ""}</div>`).join("");
+      const sideDot = side === "yes" ? "dot-yes" : "dot-no";
+      const sideLabel = side === "yes" ? "YES" : "NO";
+      return `<div class="bucket ${changed ? "bucket-changed" : ""}">
+        <div class="bucket-title">${name}</div>
+        <div class="bucket-sub">Order book + escrow vaults</div>
+        <div class="text-xs uppercase tracking-wider mb-1" style="color:#64748b">Bids</div>
+        ${renderOrders(s.bids || [])}
+        <div class="text-xs uppercase tracking-wider mt-2 mb-1" style="color:#64748b">Asks</div>
+        ${renderOrders(s.asks || [])}
+        <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid rgba(45,54,84,0.6);">
+          ${row("Quote vault", "dot-usdc", money(s.qv), "qv" in prev ? money(prev.qv) : null)}
+          ${row("Base vault",  sideDot,   s.bv + " " + sideLabel, "bv" in prev ? prev.bv + " " + sideLabel : null)}
+        </div>
+      </div>`;
+    }
+
+    function movedStrip(state) {
+      const labelMap = { john: "John", kerry: "Kerry", bob: "Bob", vault: "Vault", yesClob: "YES CLOB", noClob: "NO CLOB" };
+      const fieldMap = { yes: "YES", no: "NO", usdc: "USDC", qv: "quote escrow", bv: "base escrow", pairs: "pairs out" };
+      const parts = [];
+      for (const [actor, data] of Object.entries(state)) {
+        if (!data.before) continue;
+        for (const [field, prevVal] of Object.entries(data.before)) {
+          const nowVal = data[field];
+          const isMoney = (field === "usdc" || field === "qv");
+          const nowStr = isMoney ? money(nowVal) : nowVal;
+          const prevStr = isMoney ? money(prevVal) : prevVal;
+          parts.push(`<span class="font-mono text-slate-300">${labelMap[actor]} · ${fieldMap[field]}</span> <span class="font-mono text-indigo-300">${nowStr} ← ${prevStr}</span>`);
+        }
+      }
+      if (parts.length === 0) return "";
+      return `<div class="moved-strip mt-4"><span class="font-semibold text-indigo-200">What moved:</span> ${parts.join(" &nbsp;·&nbsp; ")}</div>`;
+    }
+
+    function renderStep(step) {
+      const s = step.state;
+      return `<div class="panel p-6">
+        <div class="flex items-start gap-5 mb-5">
+          <div class="shrink-0 flex flex-col items-center justify-center rounded-lg px-3 py-2" style="background:rgba(99,102,241,0.15);min-width:3rem">
+            <div class="text-xs uppercase tracking-wider text-indigo-300">Step</div>
+            <div class="text-2xl font-bold font-mono text-indigo-200">${step.n}</div>
+          </div>
+          <div>
+            <div class="text-lg font-semibold text-slate-100">${step.headline}</div>
+            <p class="mt-1 text-sm text-slate-400">${step.why}</p>
+          </div>
+        </div>
+        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Wallets (user ATAs)</div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 mb-5">
+          ${walletCard("John",  s.john)}
+          ${walletCard("Kerry", s.kerry)}
+          ${walletCard("Bob",   s.bob)}
+        </div>
+        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Program PDAs</div>
+        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          ${vaultCard(s.vault)}
+          ${clobCard("YES CLOB", "yes", s.yesClob)}
+          ${clobCard("NO CLOB",  "no",  s.noClob)}
+        </div>
+        ${movedStrip(s)}
+        ${step.sum ? `<div class="mt-4 p-3 rounded text-sm" style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);color:#a7f3d0;">${step.sum}</div>` : ""}
+      </div>`;
+    }
+
+    document.getElementById("storage-steps").innerHTML       = STEPS.map(renderStep).join("");
+    document.getElementById("storage-resolution").innerHTML  = RESOLUTIONS.map(renderStep).join("");
+  </script>
 
   <script>
     mermaid.initialize({
