@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { ConnectWalletButton } from "@/components/ConnectWalletButton";
+import { InfoTip } from "@/components/InfoTip";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useTrade } from "@/hooks/useTrade";
@@ -529,68 +530,165 @@ export default function TradePage({
               `cursor-not-allowed` reinforces the affordance.
               Reasons live in the constraints box above the form, NOT only
               in hover tooltips — so a user on a touch device still sees
-              the why. */}
+              the why.
+              Each button is wrapped in a `relative` div so its InfoTip
+              icon can absolutely position into the button's top-right
+              corner. The InfoTip popover explains the on-chain mechanism
+              (especially important for Buy No / Sell No, which look like
+              symmetric NO orders but actually mint or burn a pair under
+              the hood). Top-row buttons get side="top" (popover above)
+              and bottom-row get side="bottom" (popover below) so the
+              popover never overlaps the other row of buttons. */}
           <div className="grid grid-cols-2 gap-2">
-            <button
-              disabled={!trade.ready || busy !== null || holdsNo || isExpired}
-              onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty), `+${qty} YES (resting bid at ${priceTicks}¢)`)}
-              className="rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-              title={isExpired ? "Market expired" : holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
-            >
-              {busy === "Buy Yes" ? "..." : "Buy Yes"}
-            </button>
-            <button
-              disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired}
-              onClick={() =>
-                run(
-                  "Buy No",
-                  () => trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
-                  bestBid ? `+${qty} NO (paid ~$${((100 - bestBid.priceTicks) / 100).toFixed(2)} each)` : `+${qty} NO`,
-                )
-              }
-              className="rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-              title={
-                isExpired
-                  ? "Market expired"
-                  : holdsYes
-                    ? "Sell your Yes position before buying No (PRD position constraint)"
-                    : bestBid
-                      ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
-                      : "No bid available"
-              }
-            >
-              {busy === "Buy No" ? "..." : "Buy No"}
-            </button>
-            <button
-              disabled={!trade.ready || busy !== null || !holdsYes || isExpired}
-              onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty), `−${qty} YES into escrow (limit ask ${priceTicks}¢)`)}
-              className="rounded-lg border border-yes/40 bg-panel px-3 py-2 font-semibold text-yes hover:bg-yes/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-              title={isExpired ? "Market expired" : !holdsYes ? "Need Yes tokens to sell" : ""}
-            >
-              {busy === "Sell Yes" ? "..." : "Sell Yes"}
-            </button>
-            <button
-              disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired}
-              onClick={() =>
-                run(
-                  "Sell No",
-                  () => trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
-                  bestAsk ? `−${qty} NO (received ~$${((100 - bestAsk.priceTicks) / 100).toFixed(2)} each)` : `−${qty} NO`,
-                )
-              }
-              className="rounded-lg border border-no/40 bg-panel px-3 py-2 font-semibold text-no hover:bg-no/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-              title={
-                isExpired
-                  ? "Market expired"
-                  : !holdsNo
-                    ? "Need No tokens to sell"
-                    : bestAsk
-                      ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
-                      : "No ask available"
-              }
-            >
-              {busy === "Sell No" ? "..." : "Sell No"}
-            </button>
+            <div className="relative">
+              <button
+                disabled={!trade.ready || busy !== null || holdsNo || isExpired}
+                onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty), `+${qty} YES (resting bid at ${priceTicks}¢)`)}
+                className="w-full rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                title={isExpired ? "Market expired" : holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
+              >
+                {busy === "Buy Yes" ? "..." : "Buy Yes"}
+              </button>
+              <InfoTip
+                title="How Buy Yes works"
+                side="top"
+                className="absolute right-1.5 top-1.5 text-yes"
+              >
+                <p>
+                  Posts a resting limit <strong>BID</strong> on the YES order book at your chosen price (cents).
+                  Escrows your USDC into the book&apos;s <code className="text-indigo-300">usdc_escrow</code>.
+                </p>
+                <p>
+                  Fills when a matching ASK appears and the permissionless cranker crosses them via{" "}
+                  <code className="text-indigo-300">match_orders</code> (usually within one ~400ms slot).
+                  Cancel returns your escrowed USDC any time before fill.
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  v1 has no IOC mode on <code>place_order</code>; immediate-take is achieved by posting at
+                  the current best ask and letting the cranker cross.
+                </p>
+              </InfoTip>
+            </div>
+            <div className="relative">
+              <button
+                disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired}
+                onClick={() =>
+                  run(
+                    "Buy No",
+                    () => trade.buyNo(qty, bestBid!.priceTicks, new PublicKey(bestBid!.owner)),
+                    bestBid ? `+${qty} NO (paid ~$${((100 - bestBid.priceTicks) / 100).toFixed(2)} each)` : `+${qty} NO`,
+                  )
+                }
+                className="w-full rounded-lg bg-no/20 px-3 py-2 font-semibold text-no hover:bg-no/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                title={
+                  isExpired
+                    ? "Market expired"
+                    : holdsYes
+                      ? "Sell your Yes position before buying No (PRD position constraint)"
+                      : bestBid
+                        ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
+                        : "No bid available"
+                }
+              >
+                {busy === "Buy No" ? "..." : "Buy No"}
+              </button>
+              <InfoTip
+                title="How Buy No actually works"
+                side="top"
+                className="absolute right-1.5 top-1.5 text-no"
+              >
+                <p>
+                  <strong>There is no separate NO order book.</strong> Buy No is the atomic{" "}
+                  <code className="text-indigo-300">buy_no</code> instruction. In one signed transaction it
+                  (1) deposits $1 per token of USDC into the vault, (2) mints a fresh YES+NO pair to your
+                  wallet, (3) immediately transfers the freshly-minted YES to the single best resting
+                  YES bidder on the book. You keep the NO.
+                </p>
+                <p>
+                  The fill consumes the entire quantity from <code className="text-indigo-300">bids[0]</code>{" "}
+                  alone (no slab walk). If depth is insufficient, or the bid price is below your slippage
+                  floor (= <span className="font-mono">100 − target_no_price</span>), the entire transaction
+                  reverts with <code className="text-indigo-300">IocPartialFillRejected</code> and no tokens move.
+                </p>
+                <p>
+                  Net cost per NO = <span className="font-mono">$1.00 − filled_bid_price</span>. You may pay
+                  less than your floor if the resting bid is richer.
+                </p>
+              </InfoTip>
+            </div>
+            <div className="relative">
+              <button
+                disabled={!trade.ready || busy !== null || !holdsYes || isExpired}
+                onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty), `−${qty} YES into escrow (limit ask ${priceTicks}¢)`)}
+                className="w-full rounded-lg border border-yes/40 bg-panel px-3 py-2 font-semibold text-yes hover:bg-yes/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                title={isExpired ? "Market expired" : !holdsYes ? "Need Yes tokens to sell" : ""}
+              >
+                {busy === "Sell Yes" ? "..." : "Sell Yes"}
+              </button>
+              <InfoTip
+                title="How Sell Yes works"
+                side="bottom"
+                className="absolute right-1.5 top-1.5 text-yes"
+              >
+                <p>
+                  Posts a resting limit <strong>ASK</strong> on the YES order book at your chosen price.
+                  Escrows your YES tokens into <code className="text-indigo-300">yes_escrow</code>.
+                </p>
+                <p>
+                  Fills when a matching BID appears and the cranker crosses them via{" "}
+                  <code className="text-indigo-300">match_orders</code>. Cancel returns your escrowed YES
+                  any time before fill.
+                </p>
+              </InfoTip>
+            </div>
+            <div className="relative">
+              <button
+                disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired}
+                onClick={() =>
+                  run(
+                    "Sell No",
+                    () => trade.sellNo(qty, bestAsk!.priceTicks, new PublicKey(bestAsk!.owner)),
+                    bestAsk ? `−${qty} NO (received ~$${((100 - bestAsk.priceTicks) / 100).toFixed(2)} each)` : `−${qty} NO`,
+                  )
+                }
+                className="w-full rounded-lg border border-no/40 bg-panel px-3 py-2 font-semibold text-no hover:bg-no/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
+                title={
+                  isExpired
+                    ? "Market expired"
+                    : !holdsNo
+                      ? "Need No tokens to sell"
+                      : bestAsk
+                        ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
+                        : "No ask available"
+                }
+              >
+                {busy === "Sell No" ? "..." : "Sell No"}
+              </button>
+              <InfoTip
+                title="How Sell No actually works"
+                side="bottom"
+                className="absolute right-1.5 top-1.5 text-no"
+              >
+                <p>
+                  <strong>There is no separate NO order book.</strong> Sell No is the atomic{" "}
+                  <code className="text-indigo-300">sell_no</code> instruction. In one signed transaction it
+                  (1) pays the single best resting YES ASK in USDC, (2) receives that YES from{" "}
+                  <code className="text-indigo-300">yes_escrow</code> transiently, (3) burns your YES + NO pair,
+                  (4) releases $1 per token from the vault to you.
+                </p>
+                <p>
+                  The fill consumes the entire quantity from <code className="text-indigo-300">asks[0]</code>{" "}
+                  alone (no slab walk). If depth is insufficient, or the ask price is above your slippage
+                  ceiling (= <span className="font-mono">100 − target_no_proceeds</span>), the entire
+                  transaction reverts.
+                </p>
+                <p>
+                  Net proceeds per NO = <span className="font-mono">$1.00 − filled_ask_price</span>. Your
+                  existing NO is burned (not transferred to another wallet); the buyer of NO somewhere
+                  else on the network would have minted theirs fresh via <code>buy_no</code>.
+                </p>
+              </InfoTip>
+            </div>
           </div>
 
           <button
