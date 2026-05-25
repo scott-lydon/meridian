@@ -69,9 +69,11 @@ Acceptance:
 - Given the user has USDC ≥ 1 and holds no Yes tokens for this strike
 - When the user clicks "Buy No", enters a quantity, selects Market, and signs in the wallet
 - Then exactly one wallet popup appears (no second signature for the mint or the sell)
-- And the transaction atomically mints a Yes/No pair, sells the Yes at the best bid, and leaves the user with `quantity` No tokens
-- And the USDC delta equals `quantity × (1.00 − best_bid_yes_price)` exactly
-- And if any leg of the atomic transaction would fail, the whole transaction reverts and no orphan Yes tokens exist
+- And the on-chain call is `buy_no(qty, min_bid_price_ticks)` where `min_bid_price_ticks` is the floor on the resting Yes bid the user is willing to cross (set by the frontend to `100 − target_no_price_ticks`). The user does not pass a "No price" directly; the API parameter is always a floor on the Yes bid side.
+- And the transaction atomically mints a Yes/No pair, transfers the freshly minted Yes to the single best resting Yes bidder, and leaves the user with `qty` No tokens. The implementation in `programs/meridian/src/instructions/buy_no.rs` fills against `bids[0]` only (no slab walk); the entire `qty` must fit against that one bid or the transaction reverts (`IocPartialFillRejected`).
+- And the USDC delta equals `qty × (1.00 − filled_bid_price)`, where `filled_bid_price` is the actual price of `bids[0]` and is guaranteed to be `>= min_bid_price_ticks` (the user may be filled at a better price than their floor; never worse)
+- And if any leg of the atomic transaction would fail (no bids, insufficient bid depth, slippage breach, wrong maker ATA), the whole transaction reverts and no orphan Yes or No tokens exist
+- And to sweep liquidity across multiple price levels in one position-build, the frontend sends N separate `buy_no` transactions (one per level); v1 does not walk multiple bids inside a single instruction
 
 Rubric: Architecture (the atomicity is the whole point), Security (no partial state).
 
@@ -94,8 +96,10 @@ Acceptance:
 - Given the user holds No tokens for this strike
 - When the user clicks "Sell No", enters quantity, selects Market, signs once
 - Then exactly one wallet popup appears
-- And the transaction atomically buys a Yes from the ask side and redeems the resulting Yes+No pair for USDC
-- And the No balance decreases by `quantity`, USDC increases by `quantity × (1.00 − best_ask_yes_price)`, and realized P&L is shown
+- And the on-chain call is `sell_no(qty, max_ask_price_ticks)` where `max_ask_price_ticks` is the ceiling on the resting Yes ask the user is willing to pay (set by the frontend to `100 − target_no_proceeds_ticks`). The user does not pass a "No proceeds price" directly; the API parameter is always a ceiling on the Yes ask side.
+- And the transaction atomically pays the single best resting Yes asker `qty × filled_ask_price` USDC, releases that many Yes from `yes_escrow` to the user transiently, then burns the user's `qty` Yes + `qty` No and releases `qty × $1.00` from the vault to the user. The implementation in `programs/meridian/src/instructions/sell_no.rs` fills against `asks[0]` only (no slab walk); the entire `qty` must fit against that one ask or the transaction reverts (`IocPartialFillRejected`).
+- And the No balance decreases by `qty`, USDC increases by `qty × (1.00 − filled_ask_price)`, where `filled_ask_price <= max_ask_price_ticks`. Realized P&L is shown.
+- And to sweep liquidity across multiple price levels in one exit, the frontend sends N separate `sell_no` transactions
 
 Rubric: Architecture (the buy-Yes-then-redeem-pair atomicity), Testing.
 

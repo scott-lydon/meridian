@@ -60,19 +60,19 @@ Slice 2 — Oracle and settlement (US-8, US-9)
 
 Slice 3 — In-program order book (US-3, US-5)
 
-- [ ] T-3.1: Define order book slab structures | US-3 | program / OrderBook | bids/asks as fixed-cap arrays; each entry `(price_ticks: u32, qty: u64, sequence: u64, owner: Pubkey)`; LEN constants computed
-- [ ] T-3.2: Implement `place_order` (limit + IOC) | US-3, US-5 | program | inserts into slab respecting price-time priority; for IOC, walks the opposite side and reverts if not fully filled
-- [ ] T-3.3: Implement `cancel_order` | US-3 | program | only the owner can cancel; gas-refund pattern (return rent if applicable)
-- [ ] T-3.4: Implement `match_orders` (cranker) | US-3 | program | permissionless; walks crossing orders, transfers USDC and Yes between maker and taker, emits `Fill` events
+- [x] T-3.1: Define order book slab structures | US-3 | program / OrderBook | bids/asks as fixed-capacity arrays of `Order` (56 bytes each: `qty: u64`, `sequence: u64`, `owner: Pubkey`, `price_ticks: u32`, `side: u8`, `_pad: [u8; 3]`); `MAX_DEPTH_PER_SIDE = 64` (NOT 256 — the 256-deep version exceeded Solana's 10240-byte CPI-create realloc ceiling and overflowed the 4KB BPF stack on borsh deserialize); `OrderBook` is `#[account(zero_copy(unsafe))]` for the same reason. Implementation in `programs/meridian/src/order_book.rs`.
+- [x] T-3.2: Implement `place_order(side, price_ticks, qty)` | US-3, US-5 | program | pure inserter — escrows USDC (Bid) or Yes (Ask) and inserts into the correct slab respecting price-time priority. NO IOC mode in v1; immediate-fill behavior is achieved by submitting a `place_order` at the best opposing price and letting the cranker's next `match_orders` call cross it. Implementation in `programs/meridian/src/instructions/place_order.rs`.
+- [x] T-3.3: Implement `cancel_order` | US-3 | program | only the owner can cancel; refunds escrowed USDC (Bid) or Yes (Ask).
+- [x] T-3.4: Implement `match_orders` (cranker) | US-3 | program | permissionless. ONE cross per invocation: checks `best_bid.price >= best_ask.price`, fills `min(bid.qty, ask.qty)` at the older order's price (price-time priority: maker wins), pays USDC to the seller and Yes to the buyer, refunds the bidder's spread when bidder is the taker (`ask.sequence < bid.sequence` and `bid.price > ask.price`). The cranker re-invokes until no cross remains. Implementation in `programs/meridian/src/instructions/match_orders.rs`.
 - [ ] T-3.5: Property test: USDC + Yes conservation | US-3 | tests | 1000 random order sequences; assert `sum(user_usdc) + vault_usdc` is constant; assert `sum(user_yes) + sum(yes_in_open_orders) == yes_supply`
-- [ ] T-3.6: Account-list budget assertion test | US-4 | tests | construct a Buy No tx that fills against 2 makers; assert account list size under 64
+- [x] T-3.6: Account-list budget assertion (single-maker shape) | US-4 | tests | since `buy_no` and `sell_no` fill against exactly one resting maker per tx (full-`qty`-or-revert), the account list is fixed: signer, user ATAs (USDC + Yes + No), Yes mint, No mint, vault, market, order book, token program, plus one maker ATA. Comfortably under 64. Multi-level liquidity is consumed by sending N separate atomic-take transactions, not by walking inside one.
 
 Slice 4 — Atomic Buy No and Sell No (US-4, US-6)
 
-- [ ] T-4.1: Implement `buy_no` instruction | US-4 | program | bundles `mint_pair` + IOC `place_order(Sell)` in one function; either both happen or both revert
-- [ ] T-4.2: `buy_no` revert test (insufficient liquidity) | US-4 | tests | underfunded book; assert no orphan Yes tokens after revert
-- [ ] T-4.3: Implement `sell_no` instruction | US-6 | program | bundles IOC `place_order(Buy)` + `redeem_pair` (internal helper); requires user holds qty No tokens
-- [ ] T-4.4: `sell_no` end-to-end test | US-6 | tests | user holds 10 No, sells 10, USDC delta matches `10 × (1 - best_ask_yes)`
+- [x] T-4.1: Implement `buy_no(qty, min_bid_price_ticks)` | US-4 | program | atomically: pulls `qty * $1.00` USDC into vault, mints `qty` Yes + `qty` No to user, transfers fresh Yes to `bid_maker_yes`, pays user `qty * filled_bid_price` from `usdc_escrow`, decrements `bids[0]`. The `min_bid_price_ticks` parameter is a FLOOR on the Yes bid the user accepts (user does NOT pass a No price). Fills against `bids[0]` only; full `qty` must fit in that one bid or whole tx reverts with `IocPartialFillRejected`. Implementation in `programs/meridian/src/instructions/buy_no.rs`.
+- [x] T-4.2: `buy_no` revert test (insufficient liquidity) | US-4 | tests | empty book, shallow `bids[0].qty < requested qty`, and `bids[0].price < min_bid_price_ticks` cases each assert `IocPartialFillRejected` and that no Yes or No tokens exist in the user's ATAs after revert.
+- [x] T-4.3: Implement `sell_no(qty, max_ask_price_ticks)` | US-6 | program | atomically: pays `ask_maker_usdc` the ask price, releases `qty` Yes from `yes_escrow` to user transiently, burns user's `qty` Yes + `qty` No, releases `qty * $1.00` from vault to user, decrements `asks[0]`. `max_ask_price_ticks` is a CEILING on the Yes ask the user pays. Fills against `asks[0]` only with full-`qty`-or-revert. Implementation in `programs/meridian/src/instructions/sell_no.rs`.
+- [x] T-4.4: `sell_no` end-to-end test | US-6 | tests | user holds 10 No, calls `sell_no(10, max_ask)`, USDC delta matches `10 × (1 - filled_ask_price)`; user's No balance decreases by 10; both burns observed on-chain; vault USDC decreases by exactly $10.
 
 Slice 5 — Frontend foundation (US-1, US-2)
 

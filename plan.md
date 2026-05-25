@@ -88,17 +88,17 @@ Every PDA includes a 1-byte program version in its seeds so a future v2 deployme
 - `create_strike_market` — admin or automation key calls once per strike per day. Initializes `Market`, `OrderBook`, `Vault`, `YesMint`, `NoMint`.
 - `add_strike` — admin convenience; same logic as create with explicit strike.
 - `mint_pair` — user deposits N USDC, receives N Yes and N No.
-- `place_order` — user places a limit buy or limit sell on the Yes book.
-- `cancel_order` — user cancels an unfilled order.
-- `match_orders` — anyone can crank; the crank wallet is just the automation service in practice. Walks the bids and asks slabs, fills crossing orders, transfers USDC and Yes between user ATAs.
-- `buy_no` — atomic: mints a pair from user USDC, immediately places an IOC (immediate-or-cancel) Yes sell at the user's chosen price (market = best bid).
-- `sell_no` — atomic: user must hold N No tokens. Instruction places an IOC Yes buy at the user's chosen price, then atomically burns the N Yes + N No pair from the user's ATA and releases N USDC to the user.
+- `place_order(side, price_ticks, qty)` — user posts a resting limit order on the Yes book. Pure inserter: escrows the relevant token (USDC for a Bid, Yes for an Ask) and pushes a new entry into the slab. No matching, no IOC mode, no cross-side reads. Implementation in `programs/meridian/src/instructions/place_order.rs`.
+- `cancel_order` — user cancels an unfilled order; returns escrow.
+- `match_orders` — permissionless cranker entrypoint. One cross per call: checks `best_bid.price >= best_ask.price`, fills `min(bid.qty, ask.qty)` at the older order's price (price-time priority), pays USDC to the seller and Yes to the buyer, refunds the bidder's spread when the bidder is the taker. Does NOT walk the slab inside a single instruction; the cranker re-invokes until no cross remains. Implementation in `programs/meridian/src/instructions/match_orders.rs`.
+- `buy_no(qty, min_bid_price_ticks)` — atomic: pulls `qty * $1.00` USDC into the vault, mints `qty` Yes + `qty` No to the user, transfers the freshly-minted Yes to the single best resting Yes bidder, pays the user `qty * filled_bid_price` from `usdc_escrow`. The `min_bid_price_ticks` parameter is a FLOOR on the Yes bid the user will accept; the user does not pass a No price. Fills against `bids[0]` only and requires the entire `qty` to fit in that single bid; otherwise `IocPartialFillRejected` reverts the whole transaction (no orphan tokens). Implementation in `programs/meridian/src/instructions/buy_no.rs`.
+- `sell_no(qty, max_ask_price_ticks)` — atomic: user must hold `qty` No. Pays the single best resting Yes asker `qty * filled_ask_price` USDC, releases `qty` Yes from `yes_escrow` to the user transiently, burns user's `qty` Yes + `qty` No, releases `qty * $1.00` from the vault to the user. `max_ask_price_ticks` is a CEILING on the Yes ask the user will pay; the user does not pass a No proceeds price. Fills against `asks[0]` only with full-`qty`-or-revert semantics. Implementation in `programs/meridian/src/instructions/sell_no.rs`.
 - `settle_market` — reads the oracle, validates staleness and confidence, writes the outcome account. Caller pays compute; anyone can call after 16:00 ET.
 - `admin_settle` — admin-only fallback. Enforces the 1-hour delay on-chain via `Clock::get()`.
 - `redeem` — burns user's Yes or No tokens, transfers USDC out of the vault according to the outcome. Works for losers too (returns rent, pays zero USDC).
 - `pause` / `unpause` — admin toggles the paused flag in Config. Mint and order-book entry instructions check the flag; redeem does not (see constitution §2.12).
 
-**Compute and account-list budgets.** Solana has a per-tx compute budget (currently 1.4M CUs) and a per-tx account-list cap (currently 64 accounts). The atomic Buy No instruction is the tightest path; it touches: signer, USDC ATA (user), Yes ATA (user), No ATA (user), Yes mint, No mint, vault, market, order book, system program, token program, USDC mint, plus the maker's USDC ATA and Yes ATA when the IOC sell fills. Sizing budget allows up to 2 fills per Buy No tx without splitting. Documented in code with a `// account-list budget:` comment on the `accounts` struct.
+**Compute and account-list budgets.** Solana has a per-tx compute budget (currently 1.4M CUs) and a per-tx account-list cap (currently 64 accounts). `buy_no` and `sell_no` each fill against exactly one resting order (`bids[0]` for `buy_no`, `asks[0]` for `sell_no`) and either fit the full `qty` against that single entry or revert with `IocPartialFillRejected`. Because there is only ever one maker per atomic-take tx, the account-list is fixed: signer, user's USDC/Yes/No ATAs, Yes mint, No mint, vault, market, order book, token program, plus exactly one maker ATA (`bid_maker_yes` for `buy_no`, `ask_maker_usdc` for `sell_no`). To consume liquidity at multiple price levels in one position-build, the frontend sends N separate atomic-take transactions; v1 does not walk a slab inside a single instruction.
 
 ### 2.2 In-program order book (the CLOB)
 
@@ -108,11 +108,11 @@ Every PDA includes a 1-byte program version in its seeds so a future v2 deployme
 
 **Trade-off.** Phoenix's matching engine is battle-tested; ours is not. We mitigate with property tests on the matching algorithm (1000 random order sequences, asserting invariants: total USDC conservation, total Yes conservation, price-time priority).
 
-**Data structure.** Bids and asks are stored as two fixed-capacity slab arrays (linked-list-on-array, the same pattern as Serum v3 used). Each entry is `(price_ticks, quantity, sequence, owner_pubkey)`. Slab size 256 per side; if the book runs deep on a popular strike we revisit by adding an event queue and offloading match completion to the cranker.
+**Data structure.** Bids and asks are stored as two fixed-capacity slab arrays (linked-list-on-array, the same pattern as Serum v3 used). Each entry is `(qty, sequence, owner, price_ticks, side, _pad)` = 56 bytes per `Order` (see `programs/meridian/src/order_book.rs`). **Slab size 64 per side** (`MAX_DEPTH_PER_SIDE = 64`), not the 256 originally planned. The 256-deep version produced a ~28KB `OrderBook` account that overflowed Solana's 10240-byte CPI-create realloc ceiling; 64-deep brings the account to ~7.3KB and fits cleanly. The account uses Anchor's `#[account(zero_copy(unsafe))]` because the 28KB borsh deserialize also overflowed the 4KB BPF stack. If a popular strike runs the book deep, the v1.1 upgrade path is a separately-allocated larger book account behind a new `init_order_book` variant, not an inline depth bump (see D3 below).
 
 **Tick size.** $0.01 in 6-decimal USDC base units = 10_000 base units per tick. 100 ticks span the full $0.00 to $1.00 range. Quantities are integer Yes tokens (no fractional tokens; tokens are 0-decimal).
 
-**Crank.** The match instruction is permissionless. The automation service runs a crank loop every slot when the book has crossable orders. Idle when there's nothing to do. Cost is bounded: at most one crank tx per matching event.
+**Crank.** The `match_orders` instruction is permissionless and crosses at most one (bid, ask) pair per invocation; the automation service runs a crank loop every slot and re-invokes until no cross remains. Idle when there's nothing to do. Per-invocation cost is bounded.
 
 ### 2.3 Frontend (Next.js)
 
@@ -216,23 +216,27 @@ For each of 7 tickers:
 Slack notify if any failure
 ```
 
-### 3.2 User trade: Buy Yes (the simple path)
+### 3.2 User trade: Buy Yes (limit + cranker-driven match)
+
+`place_order` is a pure inserter; there is no IOC mode in v1. A Buy Yes that needs to fill immediately is a `place_order(Bid, ...)` against the current best ask price, and the cross is completed by the next `match_orders` crank call (typically same slot).
 
 ```
 User clicks Buy Yes 10
   Frontend reads order book ──► best ask at $0.55
-  Frontend builds tx: place_order(side=Buy, price=$0.55, qty=10, IOC=true)
+  Frontend builds tx: place_order(side=Bid, price_ticks=55, qty=10)
   Wallet popup ──► user signs
   RPC submit ──► confirm
-  Anchor program:
-     credit check on user USDC ATA
-     walk asks slab, match against orders crossing or at $0.55
-     for each fill:
-        transfer USDC from user to maker (per fill)
-        transfer Yes from maker to user (per fill)
-        emit Fill event
-     if qty unfilled after walk: revert (IOC)
-  Frontend receives confirmed signature
+  Anchor program (place_order):
+     pulls 10 * $0.55 = $5.50 USDC: user.user_usdc → usdc_escrow
+     inserts {price_ticks: 55, qty: 10, owner: user, sequence: N} into bids slab
+  (cranker, separate tx, ~1 slot later)
+  Anchor program (match_orders):
+     best_bid.price (55) >= best_ask.price (<=55) ✓
+     fill_qty = min(bid.qty, ask.qty); fill_price = older order's price
+     pays seller USDC out of usdc_escrow; pays user (the bid maker) Yes out of yes_escrow
+     refunds bidder spread if bidder is the taker (bid.price > fill_price)
+     decrements both sides; removes filled side(s)
+  Frontend confirmed signature for place_order; cranker fill arrives via subscription
   TanStack Query invalidates: user balances, this market's order book
   Portfolio re-renders with new position
 ```
@@ -240,20 +244,26 @@ User clicks Buy Yes 10
 ### 3.3 User trade: Buy No (the atomic path)
 
 ```
-User clicks Buy No 10
-  Frontend reads best bid Yes ──► $0.45
-  Frontend builds tx: buy_no(qty=10, max_yes_sell_price=$0.45, slippage=...)
+User clicks Buy No 10 at target price 45¢
+  Frontend reads best bid Yes ──► 55¢ (better than the 55¢ floor needed)
+  Frontend computes min_bid_price_ticks = 100 − target_no_price_ticks
+                                        = 100 − 45 = 55
+  Frontend builds tx: buy_no(qty=10, min_bid_price_ticks=55)
   Wallet popup ──► user signs ONCE
-  Anchor program:
-     mint_pair(user, 10) ──► user now holds 10 Yes + 10 No, vault +10 USDC
-     place_order(user, side=Sell, price=$0.45, qty=10, IOC=true)
-       walk bids slab
-       for each fill: transfer USDC bidder→user, transfer Yes user→bidder
-     if IOC sell did not fully fill: revert entire tx (no orphan Yes)
-  Confirmed: user holds 10 No, USDC delta = -10 * (1 - 0.45) = -$5.50
+  Anchor program (buy_no):
+     pre-flight: bids_len > 0 ✓, bids[0].qty (>=10) ✓, bids[0].price_ticks (>=55) ✓
+     pulls 10 * $1.00 = $10.00 USDC: user.user_usdc → vault
+     mints 10 Yes → user.user_yes (transient)
+     mints 10 No  → user.user_no   (final position; never moves again)
+     transfers 10 Yes: user.user_yes → bid_maker_yes (the resting bidder's Yes ATA)
+     pays user: 10 * filled_bid_price USDC out of usdc_escrow → user.user_usdc
+     decrements bids[0].qty by 10; removes the entry if it goes to zero
+  Confirmed: user holds 10 No, USDC delta = -10 + 10*filled_bid_price
+            (e.g. fill at 55¢ → delta = -10 + $5.50 = -$4.50 net for 10 No at 45¢ each;
+             fill at a higher 60¢ bid → delta = -$4.00 = better than the 45¢ floor)
 ```
 
-The two instructions are bundled into a single program function (`buy_no`) so the second leg's revert undoes the first leg automatically. The user's wallet only sees one instruction in the transaction details.
+Key properties: the implementation fills against `bids[0]` only (no slab walk). If the best bid does not have the full `qty` of depth, or its price is below `min_bid_price_ticks`, the entire transaction reverts with `IocPartialFillRejected` and no tokens mint. The user's price floor is a ceiling on cost; they may be filled at a strictly-better price than they asked for. To sweep multiple price levels in one position-build, the frontend sends N separate `buy_no` transactions.
 
 ### 3.4 Settlement (16:05 ET)
 
@@ -320,7 +330,7 @@ Each panel is a "we accept X, knowing Y, mitigated by Z" statement. The architec
 
 ### 5.1 In-program order book vs Phoenix
 
-**We accept:** more implementation work and a less battle-tested matching engine. **Knowing:** Phoenix has handled real volume on mainnet for over a year, and our matcher will have only as many test sequences as we run. **Mitigated by:** property tests (1000 random sequences per CI run) asserting total USDC and total Yes conservation, plus a manual fuzzing harness. **When it would bite:** an obscure ordering bug in the slab walk that no test happens to hit. **Triggers a revisit:** if v2 needs more than 256-depth on a side, or if we observe a matching bug in production.
+**We accept:** more implementation work and a less battle-tested matching engine. **Knowing:** Phoenix has handled real volume on mainnet for over a year, and our matcher will have only as many test sequences as we run. **Mitigated by:** property tests (1000 random sequences per CI run) asserting total USDC and total Yes conservation, plus a manual fuzzing harness. **When it would bite:** an obscure ordering bug in slab insertion or removal (the v1 matcher only crosses best-vs-best per call, so there is no multi-level walk to fuzz inside one instruction; the risk is in the resting-order data structure itself). **Triggers a revisit:** if v2 needs more than 64-depth on a side, or if we observe a matching bug in production.
 
 ### 5.2 Pyth vs Switchboard
 
@@ -328,7 +338,7 @@ Each panel is a "we accept X, knowing Y, mitigated by Z" statement. The architec
 
 ### 5.3 Atomic Buy No vs separate transactions
 
-**We accept:** more program code (one extra instruction per atomic path) and tighter CU budgeting. **Knowing:** a non-atomic Buy No would be one wallet popup to mint, then a second to sell, with the user holding both Yes and No between the two if they navigate away. **Mitigated by:** account-list budget documented per instruction, CU profile asserted in tests. **When it would bite:** if the IOC sell needs to walk through > 2 maker orders, we hit account-list limits. **Triggers a revisit:** if devnet metrics show > 5% of Buy No txs hitting the account-list ceiling.
+**We accept:** more program code (one extra instruction per atomic path) and the constraint that each `buy_no`/`sell_no` fills against exactly one resting maker. **Knowing:** a non-atomic Buy No would be one wallet popup to mint, then a second to sell, with the user holding both Yes and No between the two if they navigate away. **Mitigated by:** the single-maker shape keeps the account list fixed and well under Solana's caps; the frontend pre-checks `bids[0].qty` against the user's requested `qty` and prompts to split if the best bid is too shallow. **When it would bite:** thin books on a popular strike — a 100-No order against a 10-deep best bid forces 10 separate `buy_no` txs, each with its own signature and signature fee. **Triggers a revisit:** if devnet metrics show > 20% of large `buy_no` orders splitting into > 3 txs.
 
 ### 5.4 Position constraint as UX rule, not program invariant
 
@@ -408,8 +418,8 @@ These were open questions; the user locked them in to their recommended defaults
 
 - **D1: Devnet faucet UX.** The frontend embeds a "Get devnet USDC" button that hits Circle's official devnet USDC faucet. On rate-limit (HTTP 429), it falls back to a clickable link to the faucet page so the user can complete the request manually. Implementation: `src/lib/faucet.ts` with one exported `requestDevnetUsdc(address)` function.
 - **D2: Crank wallet funding.** The cranker keypair starts with 5 SOL. The automation service polls the cranker's balance every 5 minutes; when it drops below 1 SOL, fires a Slack alert with a manual top-up link. No auto-top-up in v1 (keeps the admin in the loop on funding).
-- **D3: Per-market order book capacity.** 256 entries per side. The capacity is stored in `Config.order_book_max_depth` so v1.1 can raise it without a program redeploy by initializing new markets at the new value. Existing markets retain their original capacity.
-- **D4: Order book event queue.** Slice 3 ships WITHOUT an event queue; matches complete synchronously inside `match_orders`. If a single `match_orders` invocation hits the Solana per-tx CU limit (1.4M) or account-list cap (64), we add an event queue in a follow-up slice. Sized correctly for v1 at 2-fill-per-match ceilings; documented in `tests/cu-profile/`.
+- **D3: Per-market order book capacity.** 64 entries per side (`MAX_DEPTH_PER_SIDE = 64` in `programs/meridian/src/order_book.rs`). The plan originally specified 256, but the resulting ~28KB `OrderBook` account exceeded Solana's 10240-byte CPI-create realloc ceiling and also overflowed the 4KB BPF stack on borsh deserialize. The fix was twofold: drop the per-side cap to 64 (~7.3KB account) AND switch to `#[account(zero_copy(unsafe))]` so the account is read directly from raw bytes without copying. The v1.1 upgrade path for popular strikes is a separately-allocated larger book account behind a new `init_order_book` variant; raising the compile-time constant in place is not a runtime decision.
+- **D4: Order book matching cadence.** Slice 3 ships WITHOUT an event queue; `match_orders` is single-cross-per-invocation (one bid against one ask, fill quantity `min(bid.qty, ask.qty)`). The cranker re-invokes until no cross remains. This keeps each tx well inside the per-tx CU and account-list caps. If a future slice batches multiple fills per crank, an event queue and a separate completion crank instruction would land then; v1 does not need them.
 - **D5: USDC representation in the frontend.** Branded type: `type UsdcBase = bigint & { readonly __brand: 'UsdcBase' }`. All arithmetic in base units. Conversion to display happens at the React leaf via a `formatUsdc(amount: UsdcBase): string` function that returns two-decimal strings. The `number` type is forbidden for money values; ESLint rule `no-restricted-syntax` enforces it.
 - **D6: Pyth feed timing for the morning job.** Assume Pyth has the previous trading day's 4:00 PM ET close available by 08:00 ET the next morning (Pyth Network's stock-equity feeds publish during US market hours and the last published price persists). The morning job logs `publish_time` for every price it reads, so any drift is immediately debuggable from the log. If Pyth devnet does NOT carry MAG7 stock-equity feeds, slice 2 surfaces this as a hard failure and we pivot to Switchboard (decision #4 reversal documented as an amendment).
 - **D7: Order book empty state.** Empty bid AND empty ask sides render a single panel: "Be the first to quote — Mint pair to provide liquidity" with a primary "Mint Pair" button. Empty-only-one-side renders normally (the other side is the source of liquidity for IOC orders). The trade panel disables Market orders when the relevant side is empty, with a tooltip explaining why; limit orders remain available.
