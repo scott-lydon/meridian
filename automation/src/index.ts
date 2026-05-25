@@ -14,6 +14,7 @@ import { logger } from "./lib/logger.js";
 import { runMorningJob } from "./jobs/morning.js";
 import { runSettlementJob } from "./jobs/settlement.js";
 import { runExpirySweep } from "./jobs/expirySweep.js";
+import { runSettleOneMarket } from "./jobs/settleOneMarket.js";
 import {
   runCreateCustomMarket,
   CreateCustomMarketError,
@@ -364,6 +365,50 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
+  // ===== Admin-only: settle a single market on demand. =====
+  //
+  // POST /admin/settle-market with JSON body { marketPubkey: "...base58..." }
+  // and headers x-admin-username: admin / x-admin-password: pass.
+  //
+  // Why this exists: the 30-second expirySweep cron handles auto-settlement
+  // for every past-expiry market without operator intervention, BUT the
+  // sweep depends on the deployed automation service being up-to-date. If
+  // the Render auto-deploy missed a commit (the failure mode that produced
+  // the AAPL "Expired 74h 18m ago — awaiting settle" report on 2026-05-25),
+  // there is no in-product affordance for the admin to force settle the
+  // stuck market other than waiting for the next sweep tick AFTER the
+  // service redeploys. This endpoint gives the trade page a button to call
+  // immediately for that single market, using the same Pyth-primary +
+  // settle_market_manual-fallback shape as the sweep.
+  //
+  // Same admin/pass auth as /admin/create-market; same CORS posture (we
+  // intentionally allow cross-origin so the Next.js frontend can call us
+  // from a browser session).
+  if (req.url === "/admin/settle-market" && req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type, x-admin-username, x-admin-password",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return;
+  }
+  if (req.url === "/admin/settle-market" && req.method === "POST") {
+    handleSettleMarket(req, res).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, "/admin/settle-market top-level error");
+      if (!res.headersSent) {
+        res.writeHead(500, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+        });
+        res.end(JSON.stringify({ error: "internal", message }));
+      }
+    });
+    return;
+  }
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found\n");
 });
@@ -501,6 +546,112 @@ async function handleCreateMarket(
     }
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err: message }, "/admin/create-market unexpected error");
+    return send(500, { error: "unexpected", message });
+  }
+}
+
+/**
+ * Handle POST /admin/settle-market. Streams the body, parses, authorizes,
+ * runs a single-market Pyth-primary + settle_market_manual-fallback
+ * settlement using the admin keypair, returns a JSON result the frontend
+ * can use to update its banner.
+ *
+ * Error mapping:
+ *   - missing/wrong x-admin-username + x-admin-password headers -> 401
+ *   - invalid JSON body or missing marketPubkey -> 400
+ *   - SettleOneMarketError.code MARKET_NOT_FOUND -> 404
+ *   - SettleOneMarketError.code MARKET_ALREADY_SETTLED -> 409
+ *   - SettleOneMarketError.code UNKNOWN_TICKER -> 422
+ *   - SettleOneMarketError.code SETTLE_FAILED -> 502 (upstream Solana failure)
+ *   - anything else -> 500
+ */
+async function handleSettleMarket(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  const corsHeaders = { "access-control-allow-origin": "*" } as const;
+  const send = (status: number, body: object): void => {
+    res.writeHead(status, { "content-type": "application/json", ...corsHeaders });
+    res.end(JSON.stringify(body));
+  };
+
+  // Auth gate — same admin/pass shape as /admin/create-market.
+  const headerUser = req.headers["x-admin-username"];
+  const headerPass = req.headers["x-admin-password"];
+  const username = Array.isArray(headerUser) ? headerUser[0] : headerUser;
+  const password = Array.isArray(headerPass) ? headerPass[0] : headerPass;
+  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    return send(401, {
+      error: "unauthorized",
+      message:
+        "missing or invalid x-admin-username + x-admin-password headers. " +
+        "Sign in at /admin on the frontend first; the page picks up the " +
+        "credentials from localStorage and includes them automatically.",
+    });
+  }
+
+  // Body parse with size cap (mirrors handleCreateMarket).
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+    if (chunks.reduce((s, c) => s + c.length, 0) > 8 * 1024) {
+      return send(413, {
+        error: "body_too_large",
+        message: "request body exceeded 8KB; expected a small JSON object",
+      });
+    }
+  }
+  const bodyStr = Buffer.concat(chunks).toString("utf8");
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyStr);
+  } catch (err) {
+    return send(400, {
+      error: "invalid_json",
+      message: `request body is not valid JSON: ${String(err)}`,
+    });
+  }
+  if (typeof body !== "object" || body === null) {
+    return send(400, {
+      error: "invalid_body_shape",
+      message: "request body must be a JSON object",
+    });
+  }
+  const { marketPubkey } = body as Record<string, unknown>;
+  if (typeof marketPubkey !== "string" || marketPubkey.length < 32 || marketPubkey.length > 44) {
+    return send(400, {
+      error: "missing_field",
+      message:
+        "field 'marketPubkey' is required, must be a base58-encoded Solana account address (32-44 chars). " +
+        "Got: " +
+        JSON.stringify(marketPubkey),
+    });
+  }
+
+  try {
+    const result = await runSettleOneMarket(env, { marketPubkey });
+    logger.info({ result }, "/admin/settle-market succeeded");
+    return send(200, result);
+  } catch (err) {
+    // Lazy-import the error type to avoid circular ESM evaluation; runtime
+    // shape check below is the actual gate.
+    const { SettleOneMarketError } = await import("./jobs/settleOneMarket.js");
+    if (err instanceof SettleOneMarketError) {
+      if (err.code === "MARKET_NOT_FOUND") {
+        return send(404, { error: "market_not_found", message: err.message });
+      }
+      if (err.code === "MARKET_ALREADY_SETTLED") {
+        return send(409, { error: "market_already_settled", message: err.message });
+      }
+      if (err.code === "UNKNOWN_TICKER") {
+        return send(422, { error: "unknown_ticker", message: err.message });
+      }
+      if (err.code === "SETTLE_FAILED") {
+        return send(502, { error: "settle_failed", message: err.message });
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err: message }, "/admin/settle-market unexpected error");
     return send(500, { error: "unexpected", message });
   }
 }
