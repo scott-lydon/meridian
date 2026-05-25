@@ -303,7 +303,20 @@ export function NetworkBadge() {
         <div
           role="dialog"
           aria-label="Wallet network switch instructions"
-          className="absolute right-0 z-30 mt-2 w-[min(28rem,calc(100vw-3rem))] rounded-2xl border border-panel bg-bg/95 p-5 text-sm shadow-2xl backdrop-blur-md"
+          // Bounded height + overflow so the multi-step Phantom panel (which
+          // includes the inline avatar diagram, a five-step ordered list, and
+          // a help link) fits on short laptop screens without the bottom of
+          // the popover disappearing under the viewport. Without the height
+          // cap the popover renders full content height and the last steps
+          // are unreachable by scroll (the popover is absolutely positioned,
+          // not part of the page flow). The math gives ~80vh on tall
+          // displays, leaves at least 5rem of breathing room from the
+          // viewport edge on short ones, and the overflow-y-auto turns
+          // overflow into a real scrollbar. `overscroll-contain` prevents
+          // scroll-chaining onto the page beneath, which was the second
+          // report: scrolling the popover scrolled the trade page out from
+          // under it.
+          className="absolute right-0 z-30 mt-2 max-h-[min(80vh,calc(100vh-5rem))] w-[min(28rem,calc(100vw-3rem))] overflow-y-auto overscroll-contain rounded-2xl border border-panel bg-bg/95 p-5 text-sm shadow-2xl backdrop-blur-md"
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
