@@ -237,15 +237,18 @@ sequenceDiagram
   <!-- Storage walkthrough -->
   <section id="storage" class="mx-auto max-w-6xl px-6 py-12">
     <h2 class="mb-2 text-3xl font-bold">Storage walkthrough</h2>
+    <p class="mb-3 max-w-3xl text-slate-400">
+      Meridian has <span class="text-indigo-300 font-semibold">one order book per market</span>. It trades YES tokens priced in USDC. The "NO view" in the user interface is a pure transform of the same book with prices mirrored across $1. NO trades happen in a single signed transaction via the atomic <code class="text-xs text-indigo-300">buy_no</code> and <code class="text-xs text-indigo-300">sell_no</code> instructions, which bundle a pair mint or burn with a fill against the book.
+    </p>
     <p class="mb-6 max-w-3xl text-slate-400">
-      Where every YES, NO, and dollar lives at each step. Three wallets and three program PDAs. A glowing border means the bucket changed this step. Inline arrows like <span class="font-mono text-indigo-300">$0.40 ← $1.00</span> show the previous value.
+      Each step below shows the five places state lives: three user wallets (John, Kerry, Bob) and two program PDAs (the collateral vault and the order book). A glowing border means the bucket changed this step. Inline arrows like <span class="font-mono text-indigo-300">$0.60 ← $1.00</span> show the previous value.
     </p>
 
     <!-- Legend -->
     <div class="panel p-4 mb-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
       <div class="flex items-center gap-2"><span class="dot dot-yes"></span><span class="text-slate-300">YES token · pays $1 if YES wins</span></div>
       <div class="flex items-center gap-2"><span class="dot dot-no"></span><span class="text-slate-300">NO token · pays $1 if NO wins</span></div>
-      <div class="flex items-center gap-2"><span class="dot dot-usdc"></span><span class="text-slate-300">USDC ($)</span></div>
+      <div class="flex items-center gap-2"><span class="dot dot-usdc"></span><span class="text-slate-300">USDC</span></div>
       <div class="flex items-center gap-2">
         <span class="inline-block w-3 h-3 rounded" style="border:1px solid rgba(99,102,241,0.6); box-shadow:0 0 8px rgba(99,102,241,0.4);"></span>
         <span class="text-slate-300">Changed this step</span>
@@ -256,48 +259,50 @@ sequenceDiagram
 
     <h3 class="mt-12 mb-3 text-2xl font-semibold">Step 5 · Resolution (two endings)</h3>
     <p class="mb-6 max-w-3xl text-slate-400">
-      Same starting state (after step 4). The oracle posts an outcome. Winning side redeems against the vault 1:1. Losing side becomes worthless dust.
+      Same starting state as the end of step 4: two pairs outstanding, collateral vault holding $2. Oracle posts an outcome. Winning side burns its tokens and pulls $1 per token out of the vault. Losing side becomes worthless dust.
     </p>
     <div id="storage-resolution" class="grid gap-6 lg:grid-cols-2"></div>
 
     <h3 class="mt-14 mb-3 text-2xl font-semibold">How the price gets set</h3>
-    <p class="mb-6 max-w-3xl text-slate-400">Three layers, simplest to deepest. All three are simultaneously true.</p>
+    <p class="mb-6 max-w-3xl text-slate-400">Three layers, simplest to deepest. All three are simultaneously true in Meridian's single-book design.</p>
     <div class="grid gap-4 lg:grid-cols-3">
       <div class="panel p-5">
         <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Mechanical</div>
         <p class="text-sm text-slate-300">
-          Price = the last fill on the CLOB. With no recent fill, mid price = (best bid + best ask) / 2. Orders match by price-time priority: better price first, earlier order first at the same price.
+          Price = the last fill on the order book. With no recent fill, mid price = (best bid + best ask) / 2. Orders match by price-time priority: better price first, earlier order first at the same price.
         </p>
       </div>
       <div class="panel p-5">
         <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Probabilistic</div>
         <p class="text-sm text-slate-300">
-          A YES token pays $1 if YES wins and $0 otherwise, so its expected value is the probability of winning. In a rational market, YES_price in dollars equals the implied probability. <span class="font-mono pill-yes rounded px-1.5">$0.60</span> means the market thinks YES has about 60% odds.
+          A YES token pays $1 if YES wins and $0 otherwise, so its expected value is the probability of winning. The book's YES price in dollars equals the implied probability. <span class="font-mono pill-yes rounded px-1.5">$0.60</span> means the market thinks YES has about 60% odds; the same order in the NO panel renders as <span class="font-mono pill-no rounded px-1.5">$0.40</span>.
         </p>
       </div>
       <div class="panel p-5">
-        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Arbitrage</div>
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Duality by construction</div>
         <p class="text-sm text-slate-300">
-          YES + NO stays close to $1 because anyone can mint a pair from the vault for $1 and anyone holding a pair can redeem for $1. If the books drift below or above $1, arbitrageurs pull them back. The vault is what ties the two independent CLOBs together.
+          YES + NO = $1 is enforced at the program level, not by external arbitrage. Every pair mints from exactly $1 and redeems for exactly $1 from the collateral vault, and there is no second book where prices could diverge. The NO view is the same book, transformed.
         </p>
       </div>
     </div>
 
     <div class="panel p-6 mt-6">
-      <div class="mb-3 text-xs font-semibold uppercase tracking-wider text-indigo-300">The arbitrage loop, drawn</div>
+      <div class="mb-3 text-xs font-semibold uppercase tracking-wider text-indigo-300">The atomic NO path, drawn</div>
       <pre class="mermaid">
 flowchart LR
-  Books["YES book + NO book<br/>(market quotes)"]
-  Sum{{"YES_price + NO_price<br/>vs $1.00"}}
-  Below["sum &lt; $1<br/>(books cheap)"]
-  Above["sum &gt; $1<br/>(books rich)"]
-  BuyBoth["Arb buys both sides<br/>then redeems for $1"]
-  MintSell["Arb mints pair for $1<br/>then sells both sides"]
-  Pulled["Books pulled back<br/>toward $1"]
-  Books --> Sum
-  Sum -->|below| Below --> BuyBoth --> Pulled --> Books
-  Sum -->|above| Above --> MintSell --> Pulled
+  Bob["Bob's wallet<br/>$1 USDC"]
+  Vault["Collateral vault<br/>(holds USDC)"]
+  Mints["YES mint + NO mint"]
+  Book["Order book<br/>(YES priced in USDC)"]
+  Maker["Bid maker (Kerry)<br/>USDC escrow"]
+  Bob -->|1. mint_pair: $1 in| Vault
+  Vault -.->|2. authorize mint| Mints
+  Mints -->|3. 1 YES + 1 NO out| Bob
+  Bob -->|4. sell just-minted YES| Book
+  Book -->|5. fill best bid| Maker
+  Maker -->|6. release escrowed USDC| Bob
       </pre>
+      <p class="mt-3 text-xs text-slate-500">All six legs land in one signed transaction. If the best bid is gone or below <span class="font-mono">min_bid_price_ticks</span>, the whole thing reverts. Net for Bob: holds 1 NO, paid <span class="font-mono">$1.00 − bid_price</span>.</p>
     </div>
   </section>
 
@@ -393,70 +398,67 @@ flowchart LR
 
   <script>
     // Storage walkthrough — data + renderers
+    // Five buckets: john, kerry, bob (wallets) + vault (collateral) + book (single order book).
+    // No "noClob" — Meridian has one book; NO is synthesized by the UI transform + buy_no / sell_no atomic instructions.
     const STEPS = [
       {
         n: 0,
-        headline: "Setup · John mints 1 pair for $1",
-        why: "John transfers $1 USDC into the market vault. The program mints 1 YES + 1 NO into John's wallet ATAs. Pairs outstanding: 1. Kerry and Bob start with $1 each, untouched.",
+        headline: "Setup · John calls mint_pair($1)",
+        why: "John signs mint_pair(1). His $1 USDC moves into the collateral vault. The program mints 1 YES + 1 NO into John's wallet ATAs. Pairs outstanding goes from 0 to 1. Kerry and Bob start with $1 each, untouched.",
         state: {
-          john:    { yes: 1, no: 1, usdc: 0.00, sub: "Initial minter", before: { yes: 0, no: 0, usdc: 1.00 } },
-          kerry:   { yes: 0, no: 0, usdc: 1.00, sub: "Will buy YES" },
-          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Will buy NO" },
-          vault:   { usdc: 1.00, pairs: 1, before: { usdc: 0.00, pairs: 0 } },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+          john:  { yes: 1, no: 1, usdc: 0.00, sub: "Minted 1 pair", before: { yes: 0, no: 0, usdc: 1.00 } },
+          kerry: { yes: 0, no: 0, usdc: 1.00, sub: "Will buy YES" },
+          bob:   { yes: 0, no: 0, usdc: 1.00, sub: "Will buy NO" },
+          vault: { usdc: 1.00, pairs: 1, before: { usdc: 0.00, pairs: 0 } },
+          book:  { bids: [], asks: [], usdcEscrow: 0, yesEscrow: 0 }
         }
       },
       {
         n: 1,
-        headline: "Kerry bids · buy 1 YES at 60¢",
-        why: "Kerry's $0.60 moves from her USDC ATA into the YES CLOB's quote escrow vault. A bid entry appears in the YES bids book. No tokens move yet. If she cancels now, the $0.60 returns to her wallet.",
+        headline: "Kerry rests a bid · place_order(Bid, 40¢, qty=1)",
+        why: "Kerry's $0.40 moves from her USDC ATA into the book's USDC escrow account. A bid entry is inserted in the bids slab. No tokens move yet. Cancelling now would return her $0.40.",
         state: {
-          john:    { yes: 1, no: 1, usdc: 0.00, sub: "Initial minter" },
-          kerry:   { yes: 0, no: 0, usdc: 0.40, sub: "Bid open", before: { usdc: 1.00 } },
-          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
-          vault:   { usdc: 1.00, pairs: 1 },
-          yesClob: { bids: [{ owner: "Kerry", price: 60, qty: 1, isNew: true }], asks: [], qv: 0.60, bv: 0, before: { qv: 0.00 } },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+          john:  { yes: 1, no: 1, usdc: 0.00, sub: "Will sell YES" },
+          kerry: { yes: 0, no: 0, usdc: 0.60, sub: "Bid resting", before: { usdc: 1.00 } },
+          bob:   { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
+          vault: { usdc: 1.00, pairs: 1 },
+          book:  { bids: [{ owner: "Kerry", price: 40, qty: 1, isNew: true }], asks: [], usdcEscrow: 0.40, yesEscrow: 0, before: { usdcEscrow: 0.00 } }
         }
       },
       {
         n: 2,
-        headline: "YES match · John sells 1 YES at 60¢, Kerry's bid fills",
-        why: "John's 1 YES routes through the YES CLOB's base vault and out to Kerry's YES ATA. The $0.60 in escrow routes to John's USDC ATA. Book clears. Market vault and outstanding pairs are untouched, because no pair was minted or redeemed.",
+        headline: "John fills · place_order(Ask, 40¢, qty=1) crosses",
+        why: "John submits a YES ask at 40¢. The matching engine crosses it against Kerry's resting bid. John's 1 YES routes through the book's YES escrow and out to Kerry's YES ATA. Kerry's $0.40 escrow routes to John's USDC ATA. Book empties. Collateral vault untouched, because no pair was minted or burned.",
         state: {
-          john:    { yes: 0, no: 1, usdc: 0.60, sub: "Sold YES", before: { yes: 1, usdc: 0.00 } },
-          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Got YES", before: { yes: 0 } },
-          bob:     { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
-          vault:   { usdc: 1.00, pairs: 1 },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0, before: { qv: 0.60 } },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+          john:  { yes: 0, no: 1, usdc: 0.40, sub: "Sold YES, holds NO", before: { yes: 1, usdc: 0.00 } },
+          kerry: { yes: 1, no: 0, usdc: 0.60, sub: "Got YES", before: { yes: 0 } },
+          bob:   { yes: 0, no: 0, usdc: 1.00, sub: "Idle" },
+          vault: { usdc: 1.00, pairs: 1 },
+          book:  { bids: [], asks: [], usdcEscrow: 0, yesEscrow: 0, before: { usdcEscrow: 0.40 } }
         }
       },
       {
         n: 3,
-        headline: "Bob bids · buy 1 NO at 35¢",
-        why: "Bob's $0.35 moves from his USDC ATA into the NO CLOB's quote escrow vault. A bid entry appears in the NO bids book.",
+        headline: "Kerry rests another bid · place_order(Bid, 50¢, qty=1)",
+        why: "Kerry escrows another $0.50 into the book as a fresh bid. In the user interface's NO panel, this same order is rendered as \"Kerry willing to sell NO at 50¢\" because the panel mirrors prices across $1. Storage is identical to step 1, just a higher price.",
         state: {
-          john:    { yes: 0, no: 1, usdc: 0.60, sub: "Holding NO" },
-          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Holding YES" },
-          bob:     { yes: 0, no: 0, usdc: 0.65, sub: "Bid open", before: { usdc: 1.00 } },
-          vault:   { usdc: 1.00, pairs: 1 },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
-          noClob:  { bids: [{ owner: "Bob", price: 35, qty: 1, isNew: true }], asks: [], qv: 0.35, bv: 0, before: { qv: 0.00 } }
+          john:  { yes: 0, no: 1, usdc: 0.40, sub: "Holds NO" },
+          kerry: { yes: 1, no: 0, usdc: 0.10, sub: "Bid resting", before: { usdc: 0.60 } },
+          bob:   { yes: 0, no: 0, usdc: 1.00, sub: "About to buy NO" },
+          vault: { usdc: 1.00, pairs: 1 },
+          book:  { bids: [{ owner: "Kerry", price: 50, qty: 1, isNew: true }], asks: [], usdcEscrow: 0.50, yesEscrow: 0, before: { usdcEscrow: 0.00 } }
         }
       },
       {
         n: 4,
-        headline: "NO match · John sells 1 NO at 35¢, John fully exits",
-        why: "John's 1 NO routes through the NO CLOB's base vault to Bob. $0.35 routes to John, bringing him to $0.95 total. John has now fully exited his $1 mint for $0.95: the $0.05 spread is what the market priced into the pair.",
+        headline: "Bob buys NO atomically · buy_no(qty=1, min_bid=50¢)",
+        why: "One instruction. One signature. The program pulls Bob's $1 into the collateral vault, mints a fresh (YES, NO) pair to Bob, routes Bob's just-minted YES to Kerry (the bid maker), routes Kerry's $0.50 escrow to Bob, and removes Kerry's bid. Bob keeps the NO. Net cost to Bob = $1.00 − $0.50 = $0.50. Pairs outstanding goes from 1 to 2.",
         state: {
-          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Flat", before: { no: 1, usdc: 0.60 } },
-          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "Holding YES" },
-          bob:     { yes: 0, no: 1, usdc: 0.65, sub: "Got NO", before: { no: 0 } },
-          vault:   { usdc: 1.00, pairs: 1 },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0, before: { qv: 0.35 } }
+          john:  { yes: 0, no: 1, usdc: 0.40, sub: "Holds NO" },
+          kerry: { yes: 2, no: 0, usdc: 0.10, sub: "Got more YES", before: { yes: 1 } },
+          bob:   { yes: 0, no: 1, usdc: 0.50, sub: "Bought NO @ 50¢", before: { yes: 0, no: 0, usdc: 1.00 } },
+          vault: { usdc: 2.00, pairs: 2, before: { usdc: 1.00, pairs: 1 } },
+          book:  { bids: [], asks: [], usdcEscrow: 0, yesEscrow: 0, before: { usdcEscrow: 0.50 } }
         }
       }
     ];
@@ -464,30 +466,28 @@ flowchart LR
     const RESOLUTIONS = [
       {
         n: "5a",
-        headline: "NO wins · Bob redeems",
-        why: "Oracle posts NO as the winning outcome. Bob calls redeem: 1 NO burns, $1.00 USDC transfers out of the market vault to his ATA. Kerry's 1 YES is now worthless dust.",
-        sum: "Final P&L · John −$0.05 · Kerry −$0.60 · Bob +$0.65 · sum = $3.00, equal to the $3.00 the three started with. Zero-sum.",
+        headline: "NO wins · John and Bob redeem",
+        why: "Oracle posts NO as the winning outcome. Each NO holder calls redeem: 1 NO burns, $1.00 USDC transfers out of the collateral vault to their ATA. Kerry's 2 YES are now worthless dust. Vault drains to $0; both pairs have been redeemed.",
+        sum: "Final P&L · John +$0.40 · Kerry −$0.90 · Bob +$0.50 · sum = $0.00. Wallet total after = wallet total before = $3.00. Zero-sum invariant holds.",
         state: {
-          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Closed (−$0.05)" },
-          kerry:   { yes: 1, no: 0, usdc: 0.40, sub: "YES is worthless", note: "1 YES = worthless dust" },
-          bob:     { yes: 0, no: 0, usdc: 1.65, sub: "Winner (+$0.65)", before: { no: 1, usdc: 0.65 } },
-          vault:   { usdc: 0.00, pairs: 0, before: { usdc: 1.00, pairs: 1 } },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+          john:  { yes: 0, no: 0, usdc: 1.40, sub: "Winner (+$0.40)", before: { no: 1, usdc: 0.40 } },
+          kerry: { yes: 2, no: 0, usdc: 0.10, sub: "YES worthless",   note: "2 YES = worthless dust" },
+          bob:   { yes: 0, no: 0, usdc: 1.50, sub: "Winner (+$0.50)", before: { no: 1, usdc: 0.50 } },
+          vault: { usdc: 0.00, pairs: 0, before: { usdc: 2.00, pairs: 2 } },
+          book:  { bids: [], asks: [], usdcEscrow: 0, yesEscrow: 0 }
         }
       },
       {
         n: "5b",
         headline: "YES wins · Kerry redeems",
-        why: "Oracle posts YES as the winning outcome. Kerry calls redeem: 1 YES burns, $1.00 USDC transfers out of the market vault to her ATA. Bob's 1 NO is now worthless dust.",
-        sum: "Final P&L · John −$0.05 · Kerry +$0.40 · Bob −$0.35 · sum = $3.00, equal to the $3.00 the three started with. Zero-sum.",
+        why: "Oracle posts YES as the winning outcome. Kerry burns her 2 YES and pulls $2.00 out of the collateral vault. John's 1 NO and Bob's 1 NO are worthless dust. Vault drains to $0.",
+        sum: "Final P&L · John −$0.60 · Kerry +$1.10 · Bob −$0.50 · sum = $0.00. Wallet total after = wallet total before = $3.00. Zero-sum invariant holds.",
         state: {
-          john:    { yes: 0, no: 0, usdc: 0.95, sub: "Closed (−$0.05)" },
-          kerry:   { yes: 0, no: 0, usdc: 1.40, sub: "Winner (+$0.40)", before: { yes: 1, usdc: 0.40 } },
-          bob:     { yes: 0, no: 1, usdc: 0.65, sub: "NO is worthless", note: "1 NO = worthless dust" },
-          vault:   { usdc: 0.00, pairs: 0, before: { usdc: 1.00, pairs: 1 } },
-          yesClob: { bids: [], asks: [], qv: 0, bv: 0 },
-          noClob:  { bids: [], asks: [], qv: 0, bv: 0 }
+          john:  { yes: 0, no: 1, usdc: 0.40, sub: "NO worthless",     note: "1 NO = worthless dust" },
+          kerry: { yes: 0, no: 0, usdc: 2.10, sub: "Winner (+$1.10)",  before: { yes: 2, usdc: 0.10 } },
+          bob:   { yes: 0, no: 1, usdc: 0.50, sub: "NO worthless",     note: "1 NO = worthless dust" },
+          vault: { usdc: 0.00, pairs: 0, before: { usdc: 2.00, pairs: 2 } },
+          book:  { bids: [], asks: [], usdcEscrow: 0, yesEscrow: 0 }
         }
       }
     ];
@@ -535,45 +535,43 @@ flowchart LR
       const changed = !!s.before;
       const prev = s.before || {};
       return `<div class="bucket ${changed ? "bucket-changed" : ""}">
-        <div class="bucket-title">Market vault</div>
-        <div class="bucket-sub">PDA · collateral bank</div>
+        <div class="bucket-title">Collateral vault</div>
+        <div class="bucket-sub">Market PDA · backs every outstanding (YES, NO) pair</div>
         ${row("USDC", "dot-usdc", money(s.usdc), "usdc" in prev ? money(prev.usdc) : null)}
         ${plainRow("Pairs outstanding", s.pairs, "pairs" in prev ? prev.pairs : null)}
       </div>`;
     }
 
-    function clobCard(name, side, s) {
+    function orderBookCard(s) {
       const hasNewOrder = (s.bids || []).some(o => o.isNew) || (s.asks || []).some(o => o.isNew);
       const changed = !!s.before || hasNewOrder;
       const prev = s.before || {};
       const renderOrders = (list) => list.length === 0
         ? `<div class="book-list empty">(empty)</div>`
         : list.map(o => `<div class="book-list ${o.isNew ? "new" : ""}">${o.owner} · ${o.price}¢ · ${o.qty}${o.isNew ? "  ← new" : ""}</div>`).join("");
-      const sideDot = side === "yes" ? "dot-yes" : "dot-no";
-      const sideLabel = side === "yes" ? "YES" : "NO";
       return `<div class="bucket ${changed ? "bucket-changed" : ""}">
-        <div class="bucket-title">${name}</div>
-        <div class="bucket-sub">Order book + escrow vaults</div>
-        <div class="text-xs uppercase tracking-wider mb-1" style="color:#64748b">Bids</div>
+        <div class="bucket-title">Order book</div>
+        <div class="bucket-sub">Book PDA · one per market · trades YES, prices in USDC</div>
+        <div class="text-xs uppercase tracking-wider mb-1" style="color:#64748b">Bids (buy YES)</div>
         ${renderOrders(s.bids || [])}
-        <div class="text-xs uppercase tracking-wider mt-2 mb-1" style="color:#64748b">Asks</div>
+        <div class="text-xs uppercase tracking-wider mt-2 mb-1" style="color:#64748b">Asks (sell YES)</div>
         ${renderOrders(s.asks || [])}
         <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid rgba(45,54,84,0.6);">
-          ${row("Quote vault", "dot-usdc", money(s.qv), "qv" in prev ? money(prev.qv) : null)}
-          ${row("Base vault",  sideDot,   s.bv + " " + sideLabel, "bv" in prev ? prev.bv + " " + sideLabel : null)}
+          ${row("USDC escrow", "dot-usdc", money(s.usdcEscrow), "usdcEscrow" in prev ? money(prev.usdcEscrow) : null)}
+          ${row("YES escrow",  "dot-yes",  s.yesEscrow + " YES", "yesEscrow" in prev ? prev.yesEscrow + " YES" : null)}
         </div>
       </div>`;
     }
 
     function movedStrip(state) {
-      const labelMap = { john: "John", kerry: "Kerry", bob: "Bob", vault: "Vault", yesClob: "YES CLOB", noClob: "NO CLOB" };
-      const fieldMap = { yes: "YES", no: "NO", usdc: "USDC", qv: "quote escrow", bv: "base escrow", pairs: "pairs out" };
+      const labelMap = { john: "John", kerry: "Kerry", bob: "Bob", vault: "Vault", book: "Book" };
+      const fieldMap = { yes: "YES", no: "NO", usdc: "USDC", usdcEscrow: "USDC escrow", yesEscrow: "YES escrow", pairs: "pairs out" };
       const parts = [];
       for (const [actor, data] of Object.entries(state)) {
         if (!data.before) continue;
         for (const [field, prevVal] of Object.entries(data.before)) {
           const nowVal = data[field];
-          const isMoney = (field === "usdc" || field === "qv");
+          const isMoney = (field === "usdc" || field === "usdcEscrow");
           const nowStr = isMoney ? money(nowVal) : nowVal;
           const prevStr = isMoney ? money(prevVal) : prevVal;
           parts.push(`<span class="font-mono text-slate-300">${labelMap[actor]} · ${fieldMap[field]}</span> <span class="font-mono text-indigo-300">${nowStr} ← ${prevStr}</span>`);
@@ -603,10 +601,9 @@ flowchart LR
           ${walletCard("Bob",   s.bob)}
         </div>
         <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Program PDAs</div>
-        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid gap-3 sm:grid-cols-1 lg:grid-cols-2">
           ${vaultCard(s.vault)}
-          ${clobCard("YES CLOB", "yes", s.yesClob)}
-          ${clobCard("NO CLOB",  "no",  s.noClob)}
+          ${orderBookCard(s.book)}
         </div>
         ${movedStrip(s)}
         ${step.sum ? `<div class="mt-4 p-3 rounded text-sm" style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);color:#a7f3d0;">${step.sum}</div>` : ""}
