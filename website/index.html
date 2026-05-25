@@ -76,6 +76,7 @@
         <a class="nav-link" href="#components">Components</a>
         <a class="nav-link" href="#flow">Data flow</a>
         <a class="nav-link" href="#storage">Storage walkthrough</a>
+        <a class="nav-link" href="#yesno">YES vs NO</a>
         <a class="nav-link" href="#decisions">Decisions</a>
         <a class="nav-link" href="#tradeoffs">Trade-offs</a>
         <a class="nav-link" href="#stack">Stack</a>
@@ -326,6 +327,184 @@ flowchart LR
   Escrow -->|"6. release escrowed $0.50"| BobUSDC
       </pre>
       <p class="mt-3 text-xs text-slate-500">All six effects land in one signed transaction. If the best resting bid is gone or below <span class="font-mono">min_bid_price_ticks</span>, the whole transaction reverts and no token account changes. Net for Bob: holds 1 NO in his NO ATA, paid <span class="font-mono">$1.00 − bid_price</span> ($0.50 in this example). Note that the YES transfer goes directly from Bob's freshly-minted YES ATA to Kerry's YES ATA — the book's YES escrow ATA is not touched because Kerry's resting order was a bid, not an ask.</p>
+    </div>
+  </section>
+
+  <!-- YES vs NO mechanics -->
+  <section id="yesno" class="mx-auto max-w-6xl px-6 py-12">
+    <h2 class="mb-2 text-3xl font-bold">YES vs NO mechanics</h2>
+    <p class="mb-3 max-w-3xl text-slate-400">
+      The on-chain book trades <span class="text-indigo-300 font-semibold">YES only</span>. NO is synthesized from the same book via the duality <span class="font-mono">NO_price = $1 − YES_price</span>, which the mint and redeem rails enforce as a hard arbitrage constraint, not as a guideline. Most things YES and NO can do are symmetric. The one place they diverge is in how many user-signed instructions it takes to <em>rest</em> a limit order in the book.
+    </p>
+    <p class="mb-6 max-w-3xl text-slate-400">
+      The panels below show, side by side, the chain of state changes for the three "place a limit order" paths. The YES bid path uses one instruction. Both NO paths use two.
+    </p>
+
+    <div class="grid gap-6 lg:grid-cols-3">
+      <!-- YES bid: 1 instruction -->
+      <div class="panel p-5">
+        <div class="mb-2 flex items-center gap-2">
+          <span class="text-xs font-mono pill-yes rounded px-2 py-0.5">YES</span>
+          <span class="text-xs font-mono pill-accent rounded px-2 py-0.5">1 instruction</span>
+        </div>
+        <h3 class="text-lg font-semibold">Rest a limit BUY YES at 60¢</h3>
+        <p class="mt-1 text-xs text-slate-400">User signs once. The book holds YES bids natively, so this is one round trip from wallet to book.</p>
+        <pre class="mermaid mt-3">
+flowchart TB
+  YU["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='14'/> User wallet<br/>(signs ONCE)"]
+  YIX["place_order(Bid, 60¢, qty=1)"]
+  YE["USDC escrow ATA<br/>+$0.60"]
+  YS["Bids slab<br/>+1 entry: 'User · 60¢ · 1'"]
+  YU --> YIX
+  YIX --> YE
+  YIX --> YS
+        </pre>
+        <p class="mt-3 text-xs text-slate-500">Locks $0.60 of USDC. Cancel returns it.</p>
+      </div>
+
+      <!-- NO buy at limit: 2 instructions -->
+      <div class="panel p-5">
+        <div class="mb-2 flex items-center gap-2">
+          <span class="text-xs font-mono pill-no rounded px-2 py-0.5">NO</span>
+          <span class="text-xs font-mono pill-accent rounded px-2 py-0.5">2 instructions</span>
+        </div>
+        <h3 class="text-lg font-semibold">Rest a limit BUY NO at 40¢</h3>
+        <p class="mt-1 text-xs text-slate-400">The mirror price is a YES ask at 60¢. The user must first mint a pair to source the YES they post on the ask, then keep the NO from that pair.</p>
+        <pre class="mermaid mt-3">
+flowchart TB
+  NU["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='14'/> User wallet<br/>(signs TWICE)"]
+  NIX1["1. mint_pair(qty=1)"]
+  NV["Vault<br/>+$1.00"]
+  NY["User YES ATA<br/>+1 (transient)"]
+  NN["User NO ATA<br/>+1 (KEEP)"]
+  NIX2["2. place_order(Ask, 60¢, qty=1)"]
+  NE["YES escrow ATA<br/>+1 YES"]
+  NS["Asks slab<br/>+1 entry: 'User · 60¢ · 1'"]
+  NU --> NIX1
+  NIX1 --> NV
+  NIX1 --> NY
+  NIX1 --> NN
+  NU --> NIX2
+  NIX2 --> NE
+  NIX2 --> NS
+        </pre>
+        <p class="mt-3 text-xs text-slate-500">Locks the full $1.00 (the other $0.40 sits as escrowed YES). When the ask fills, the user receives $0.60 and is left holding 1 NO at an effective cost of $0.40.</p>
+      </div>
+
+      <!-- NO sell at limit: 2 instructions -->
+      <div class="panel p-5">
+        <div class="mb-2 flex items-center gap-2">
+          <span class="text-xs font-mono pill-no rounded px-2 py-0.5">NO</span>
+          <span class="text-xs font-mono pill-accent rounded px-2 py-0.5">2 instructions</span>
+        </div>
+        <h3 class="text-lg font-semibold">Rest a limit SELL NO at 55¢</h3>
+        <p class="mt-1 text-xs text-slate-400">User already holds 1 NO. The mirror price is a YES bid at 45¢. After the bid fills, the user redeems the resulting (YES, NO) pair for $1.</p>
+        <pre class="mermaid mt-3">
+flowchart TB
+  SU["<img src='https://cdn.simpleicons.org/phantom/AB9FF2' width='14'/> User wallet<br/>(holds 1 NO already)"]
+  SIX1["1. place_order(Bid, 45¢, qty=1)"]
+  SE["USDC escrow ATA<br/>+$0.45"]
+  SS["Bids slab<br/>+1 entry: 'User · 45¢ · 1'"]
+  SIX2["2. (AFTER fill)<br/>redeem_pair(qty=1)"]
+  SV["Vault<br/>−$1.00"]
+  SB["Burn 1 YES + 1 NO"]
+  SUSDC["User USDC ATA<br/>+$1.00"]
+  SU --> SIX1
+  SIX1 --> SE
+  SIX1 --> SS
+  SU --> SIX2
+  SIX2 --> SB
+  SIX2 --> SV
+  SV --> SUSDC
+        </pre>
+        <p class="mt-3 text-xs text-slate-500">Locks $0.45. Non-atomic gap between bid fill and redeem_pair; a frontend or bot bridges it. Net proceeds when complete: $0.55 for the NO.</p>
+      </div>
+    </div>
+
+    <!-- Capabilities table -->
+    <h3 class="mt-12 mb-3 text-2xl font-semibold">Capabilities side by side</h3>
+    <p class="mb-4 max-w-3xl text-slate-400">Settlement, redemption, transfer, and atomic IOC market-take are fully symmetric. The asymmetry is concentrated in the resting-limit rows.</p>
+    <div class="panel overflow-x-auto p-2">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wider text-slate-400">
+            <th class="px-4 py-3">Capability</th>
+            <th class="px-4 py-3"><span class="pill-yes rounded px-1.5 py-0.5 font-mono">YES</span></th>
+            <th class="px-4 py-3"><span class="pill-no rounded px-1.5 py-0.5 font-mono">NO</span></th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-300">
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Mint (always paired)</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">mint_pair</code></td><td class="px-4 py-3"><code class="text-xs text-indigo-300">mint_pair</code></td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Burn pre-settlement (paired)</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">redeem_pair</code></td><td class="px-4 py-3"><code class="text-xs text-indigo-300">redeem_pair</code></td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Redeem at settlement</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">redeem</code> · $1 if YES wins</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">redeem</code> · $1 if NO wins</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">SPL transfer</td><td class="px-4 py-3">yes</td><td class="px-4 py-3">yes</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Atomic IOC BUY (take liquidity)</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">place_order(Bid, P)</code> that crosses an ask · 1 ix</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">buy_no(qty, min_bid)</code> · 1 ix</td></tr>
+          <tr class="border-t border-slate-800"><td class="px-4 py-3">Atomic IOC SELL (take liquidity)</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">place_order(Ask, P)</code> that crosses a bid · 1 ix</td><td class="px-4 py-3"><code class="text-xs text-indigo-300">sell_no(qty, max_ask)</code> · 1 ix</td></tr>
+          <tr class="border-t border-slate-800 bg-slate-900/40">
+            <td class="px-4 py-3 font-semibold">Resting LIMIT BUY at price P</td>
+            <td class="px-4 py-3"><code class="text-xs text-indigo-300">place_order(Bid, P)</code><br/><span class="text-xs text-slate-400">1 instruction · locks <span class="font-mono">P × qty</span> USDC</span></td>
+            <td class="px-4 py-3"><code class="text-xs text-indigo-300">mint_pair(qty)</code> then <code class="text-xs text-indigo-300">place_order(Ask, $1 − P, qty)</code><br/><span class="text-xs text-slate-400">2 instructions · locks <span class="font-mono">$1 × qty</span> USDC until ask fills</span></td>
+          </tr>
+          <tr class="border-t border-slate-800 bg-slate-900/40">
+            <td class="px-4 py-3 font-semibold">Resting LIMIT SELL at price P</td>
+            <td class="px-4 py-3"><code class="text-xs text-indigo-300">place_order(Ask, P)</code><br/><span class="text-xs text-slate-400">1 instruction · locks <span class="font-mono">qty</span> YES</span></td>
+            <td class="px-4 py-3"><code class="text-xs text-indigo-300">place_order(Bid, $1 − P, qty)</code> then (on fill) <code class="text-xs text-indigo-300">redeem_pair(qty)</code><br/><span class="text-xs text-slate-400">2 instructions · non-atomic gap · locks <span class="font-mono">(1 − P) × qty</span> USDC</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Decomposition insight -->
+    <h3 class="mt-12 mb-3 text-2xl font-semibold">Atomic instructions are compositions of vanilla operations</h3>
+    <p class="mb-4 max-w-3xl text-slate-400">The atomic <code class="text-xs text-indigo-300">buy_no</code> and <code class="text-xs text-indigo-300">sell_no</code> instructions are not new primitives. They are atomic wrappers around sequences of plain <code class="text-xs text-indigo-300">mint_pair</code> / <code class="text-xs text-indigo-300">place_order</code> / <code class="text-xs text-indigo-300">match_orders</code> / <code class="text-xs text-indigo-300">redeem_pair</code> calls that any user could perform manually. The wrappers exist for two reasons: one wallet signature instead of three, and no mid-flow state where the user transiently holds a fully-hedged pair they did not ask for.</p>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">buy_no = atomic(mint_pair + place_order(Ask) + match_orders)</div>
+        <p class="text-sm text-slate-300">Manually: deposit $1 collateral to mint a YES+NO pair, post the YES as a resting ask at the cross-price, wait for the cranker to match it against a YES bid. The atomic version does all three in one signed transaction, with one optimization: the freshly-minted YES is transferred straight to the bid maker without round-tripping through <code class="text-xs text-indigo-300">yes_escrow</code> (because there is no resting order needing to park collateral). Net to the user: -$1 collateral + (filled_bid_price USDC paid back) = pays <span class="font-mono">$1 − filled_bid_price</span> for the NO they keep.</p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">sell_no = atomic(place_order(Bid) + match_orders + redeem_pair)</div>
+        <p class="text-sm text-slate-300">Manually: post a YES bid at the cross-price, wait for the cranker to fill it against a YES ask, then call <code class="text-xs text-indigo-300">redeem_pair</code> to burn the resulting YES+NO pair against the vault. The atomic version does all three in one transaction, with the symmetric escrow shortcut: payment goes straight from the user to <code class="text-xs text-indigo-300">ask_maker_usdc</code> without round-tripping through <code class="text-xs text-indigo-300">usdc_escrow</code>. Net to the user: -(filled_ask_price USDC paid to asker) + $1 from vault redemption = receives <span class="font-mono">$1 − filled_ask_price</span> for the NO they burned.</p>
+      </div>
+    </div>
+    <p class="mt-4 max-w-3xl text-xs text-slate-500">Both atomic instructions fill against the single best resting order only (<code class="text-xs text-indigo-300">bids[0]</code> or <code class="text-xs text-indigo-300">asks[0]</code>): the full <span class="font-mono">qty</span> must fit against that one order or the whole transaction reverts with <code class="text-xs text-indigo-300">IocPartialFillRejected</code>. No slab walk inside a single instruction. To sweep multiple price levels, the frontend sends N separate atomic-take transactions.</p>
+
+    <!-- Why this design -->
+    <h3 class="mt-12 mb-3 text-2xl font-semibold">Why a single (YES) book</h3>
+    <div class="grid gap-4 lg:grid-cols-3">
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Storage</div>
+        <p class="text-sm text-slate-300">The current OrderBook PDA is 7,296 bytes (depth 64 per side). A second book doubles per-market chain state. The Solana CPI account creation cap of 10KB forces a depth cut or separate rent-bearing accounts.</p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Cranker cost</div>
+        <p class="text-sm text-slate-300"><code class="text-xs text-indigo-300">match_orders</code> crosses one resting bid against one resting ask per call. Two books would mean twice the cranker calls and twice the off-chain orchestration to keep both sides clearing.</p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">No cross-book invariant to police</div>
+        <p class="text-sm text-slate-300">If best YES bid + best NO bid ever exceeded $1, anyone could mint a pair for $1 and sell both legs above $1, draining the protocol. A second book would force per-insertion sum-checks. One book removes the whole class of state machine.</p>
+      </div>
+    </div>
+
+    <!-- Caveats -->
+    <h3 class="mt-10 mb-3 text-2xl font-semibold">Caveats on the two-instruction NO routes</h3>
+    <p class="mb-4 max-w-3xl text-slate-400">Ergonomic costs, not pricing-power costs. NO holders set their own prices just as freely as YES holders. They pay for it in instruction count and, on the buy side, in temporarily-locked capital.</p>
+    <div class="grid gap-4 lg:grid-cols-2">
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Capital lockup on BUY NO at limit</div>
+        <p class="text-sm text-slate-300">The user mint-pairs for the full $1.00, even though they only "really" intend to spend <span class="font-mono">(1 − P)</span> on the NO. The other <span class="font-mono">P × qty</span> is parked as escrowed YES while the ask waits to fill. If the ask never fills, the user can <code class="text-xs text-indigo-300">cancel_order</code> to recover the YES, then <code class="text-xs text-indigo-300">redeem_pair</code> to recover the $1. A hypothetical native "buy NO at limit P" instruction would escrow only <span class="font-mono">(1 − P) × qty</span>; the two-instruction route trades capital efficiency for design simplicity.</p>
+      </div>
+      <div class="panel p-5">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Non-atomicity gap on SELL NO at limit</div>
+        <p class="text-sm text-slate-300">The YES bid sits in the book; the NO sits in the user's wallet. <code class="text-xs text-indigo-300">redeem_pair</code> is a separate call the user must submit after their bid fills. If settlement happens in the gap, the user holds the (YES, NO) pair into resolution and calls <code class="text-xs text-indigo-300">redeem</code> on the winning side for the same $1 they would have received from <code class="text-xs text-indigo-300">redeem_pair</code>: procedurally inconvenient, not economically harmful. A frontend or bot watching for fills reduces the gap to roughly one slot of latency.</p>
+      </div>
+    </div>
+
+    <!-- What "user signs" means -->
+    <h3 class="mt-10 mb-3 text-2xl font-semibold">What "the user signs" means</h3>
+    <div class="panel p-5">
+      <p class="text-sm text-slate-300 mb-2">Every state-changing call into the program requires a wallet signature. In every instruction's Accounts struct, Anchor declares <code class="text-xs text-indigo-300">pub user: Signer&lt;'info&gt;</code>, which compiles to a runtime check that the transaction carries a valid Ed25519 signature from the account passed as <code class="text-xs text-indigo-300">user</code>. In the UI that corresponds to the wallet popup ("Meridian · <code class="text-xs text-indigo-300">buy_no</code> · Approve / Reject"): the browser wallet (Phantom, Solflare, Backpack via the Solana Wallet Standard) cryptographically signs the transaction bytes with the user's private key, then submits to a Solana validator.</p>
+      <p class="text-sm text-slate-300">There is no daemon and no privileged service that signs on the user's behalf. The cranker (<code class="text-xs text-indigo-300">match_orders</code>) is permissionless and signs only as itself, and it never mints anything; it only crosses an already-resting YES bid against an already-resting YES ask.</p>
     </div>
   </section>
 

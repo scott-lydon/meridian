@@ -81,7 +81,7 @@ signs transactions inside the user's browser.
 
 ### Meridian Anchor program (`programs/meridian/`)
 
-Single Solana program. All on-chain state lives here. Slices 1, 3, 5 are merged; slice 2 (on-chain Pyth read in settle_market) and slice 4 (atomic buy_no / sell_no) are documented but deferred.
+Single Solana program. All on-chain state lives here. Slices 1, 3, 4, 5 are merged (slice 4 added `buy_no.rs` and `sell_no.rs` with the atomic single-best-only fill semantics described in [Atomic instructions as compositions of vanilla operations](#atomic-instructions-as-compositions-of-vanilla-operations) below). Slice 2 (on-chain Pyth read in `settle_market`) is documented but still uses `admin_settle` in production.
 
 Accounts:
 - `Config` (351 bytes) — admin, USDC mint, oracle thresholds, paused flag. One per program deployment.
@@ -179,6 +179,181 @@ All 7 MAG7 equity feed IDs were verified on Hermes 2026-05-20:
 3. Burns `qty` of user's Yes or No tokens.
 4. If user holds the winning side, transfers `qty * 1.00 USDC` from vault to user ATA.
 5. Losers redeem too (burn for zero USDC; rent on the ATA returns when balance hits zero).
+
+## YES and NO mechanics (single-book design)
+
+Meridian has one on-chain order book per market, and it trades YES only. There is no NO order book and no `place_no_order` instruction. NO liquidity is synthesized by combining a pair mint (or burn) with a YES-book trade. This section captures the consequences of that choice.
+
+### Two ways YES/NO pairs come into existence
+
+Both are user-signed Solana transactions. Nothing mints on a timer or as an event-driven side effect.
+
+1. **`mint_pair(qty)`** ([`mint_pair.rs`](./programs/meridian/src/instructions/mint_pair.rs)). The user signs the instruction directly. The program pulls `qty * $1.00` USDC from the user's USDC ATA into the market PDA's collateral vault, then the `vault_authority` PDA signs two `mint_to` CPIs against the SPL Token program: `qty` YES into the user's YES ATA and `qty` NO into the user's NO ATA. Pairs outstanding rises by `qty`. The vault invariant `vault_balance == yes_supply == no_supply` holds.
+
+2. **`buy_no(qty, min_bid_price_ticks)`** ([`buy_no.rs`](./programs/meridian/src/instructions/buy_no.rs)). The user signs once. The instruction is immediate-or-cancel against the **single best resting YES bid** (`bids[0]`). It does NOT walk the slab; the entire `qty` must fit against that one bid or the whole transaction reverts. The slippage parameter `min_bid_price_ticks` is a **floor** on the resting YES bid price the user will accept, not a "Buy No price" — the frontend computes it as `100 − target_no_price_ticks` before calling. The three pre-flight checks (`buy_no.rs` lines 143-183):
+
+```rust
+// programs/meridian/src/instructions/buy_no.rs lines 153-173 (abridged)
+if book.bids_len == 0 {
+    msg!("IocPartialFillRejected: no bids in book — buy_no needs liquidity");
+    return err!(MeridianError::IocPartialFillRejected);
+}
+let bid = book.bids[0];
+if bid.qty < qty {
+    msg!("IocPartialFillRejected: best_bid_qty={} < requested_qty={}", bid.qty, qty);
+    return err!(MeridianError::IocPartialFillRejected);
+}
+if bid.price_ticks < min_bid_price_ticks {
+    msg!("IocPartialFillRejected (slippage): best_bid_price={} < min_required={}", bid.price_ticks, min_bid_price_ticks);
+    return err!(MeridianError::IocPartialFillRejected);
+}
+```
+
+On the success path the program: (a) pulls `qty * $1.00` USDC from the user into the vault, (b) the `vault_authority` PDA mints `qty` YES and `qty` NO to the user, (c) transfers the freshly-minted YES from the user's YES ATA **directly** to the bid maker's YES ATA (skipping `yes_escrow` — the escrow shortcut described below), (d) the `book_authority` PDA transfers `qty * filled_bid_price` USDC out of `usdc_escrow` to the user, (e) decrements or removes the bid in the slab. The user keeps the NO; their net cost is `qty * ($1.00 − filled_bid_price)`. Note that `filled_bid_price` may be **strictly greater** than `min_bid_price_ticks` if `bids[0]` was a richer-than-floor bid; in that case the user pays LESS than their target No price. The floor is a ceiling on cost, never a fixed price.
+
+The symmetric inverse: **`sell_no(qty, max_ask_price_ticks)`** ([`sell_no.rs`](./programs/meridian/src/instructions/sell_no.rs)) fills against the single best resting YES ask (`asks[0]`), full-`qty`-or-revert, with `max_ask_price_ticks` as the **ceiling** on the YES ask the user will pay. The atomic sequence (`sell_no.rs` lines 181-279): (a) user pays `qty * filled_ask_price` USDC straight to the ask maker's USDC ATA (the symmetric escrow shortcut: payment goes direct, not through `usdc_escrow`), (b) `yes_escrow` releases `qty` YES to the user transiently, (c) the user's `qty` YES and `qty` NO are burned, (d) the vault releases `qty * $1.00` to the user, (e) `asks[0]` decrements. Net proceeds: `qty * ($1.00 − filled_ask_price)`.
+
+`redeem_pair` ([`redeem_pair.rs`](./programs/meridian/src/instructions/redeem_pair.rs)) is the third member of this family: a pure operation, no order book interaction, that burns `qty` YES + `qty` NO from the user and releases `qty * $1.00` from the vault. It works pre-settlement only (post-settlement, `redeem` is the asymmetric winner-pays-$1, loser-pays-$0 path). It is the inverse of `mint_pair`.
+
+### Atomic instructions as compositions of vanilla operations
+
+The deep insight, surfaced during architecture review: `buy_no` and `sell_no` are not new primitives. They are **atomic wrappers around sequences of vanilla `mint_pair` / `place_order` / `match_orders` / `redeem_pair` calls** that the user could perform manually but with worse UX and a vulnerable mid-flow state.
+
+```
+Atomic buy_no(qty, min_bid)              Manual three-step equivalent
+─────────────────────────────────        ─────────────────────────────────────
+1. user_usdc → vault (qty * $1)         1. mint_pair(qty)
+2. mint qty YES → user_yes                  (deposits qty * $1, mints YES+NO)
+3. mint qty NO  → user_no
+4. user_yes → bid_maker_yes (qty)        2. place_order(Ask, min_bid, qty)
+   (skips yes_escrow)                       (escrows qty YES into yes_escrow)
+5. usdc_escrow → user_usdc               3. (wait one slot for cranker)
+   (qty * filled_bid_price)                 match_orders crosses best bid:
+6. decrement bids[0]; remove if zero        - yes_escrow → bidder's YES ATA
+                                            - usdc_escrow → user_usdc (filled_bid_price)
+One signature, one slot, one popup,      Three signatures, two popups, two slots,
+escrow shortcuts skip two token CPIs.    cleaner state machine but more friction.
+```
+
+```
+Atomic sell_no(qty, max_ask)             Manual three-step equivalent
+─────────────────────────────────        ─────────────────────────────────────
+1. user_usdc → ask_maker_usdc            1. place_order(Bid, max_ask, qty)
+   (qty * filled_ask_price)                 (escrows qty * max_ask USDC)
+   (skips usdc_escrow)                   2. (wait one slot for cranker)
+2. yes_escrow → user_yes (qty)              match_orders crosses best ask:
+   (transient)                              - asker's escrowed YES → user_yes
+3. burn qty YES from user_yes               - usdc_escrow → asker's USDC
+4. burn qty NO  from user_no             3. redeem_pair(qty)
+5. vault → user_usdc (qty * $1)             (burn YES + NO, release qty * $1)
+6. decrement asks[0]; remove if zero
+                                         Three signatures, two popups,
+One signature, one slot, one popup.      mid-flow holds a complete pair that
+                                         is a fully-hedged no-op if the user
+                                         navigates away.
+```
+
+So a user "selling a No" is mechanically buying its complement (a YES) at the inverse price and cashing in the resulting pair against the vault. The bookkeeping nets out: the cost of buying the YES, minus the $1 released by `redeem_pair`, equals exactly `$1 − filled_ask_price`, the inverse-Yes-price proceeds on the NO.
+
+The atomic instructions exist for two reasons. First, UX: one signature instead of three, one wallet popup instead of two. Second, atomicity: the manual three-step can leave the user holding a complete YES+NO pair mid-flow (after step 2, before step 3), which is a fully-hedged no-op position they did not ask for. The atomic wrappers eliminate that mid-state by collapsing the sequence into one transaction that either fully succeeds or fully reverts.
+
+### Where each token actually moves
+
+The single-book design creates an asymmetry in how YES and NO flow through the protocol. YES can transfer between wallets via the order book; NO cannot. NO is created and destroyed by mint and burn operations only. The full enumeration:
+
+```
+   YES token lifecycle                       NO token lifecycle
+───────────────────────────────────────     ───────────────────────────────────────
+mint_pair                                   mint_pair
+  → minted into user's YES ATA                → minted into user's NO ATA
+
+place_order(Ask, price, qty)                (no equivalent — no "place NO order")
+  → moves user_yes → yes_escrow
+
+match_orders crosses an ask                 (no equivalent — no NO matching)
+  → moves yes_escrow → bidder's YES ATA
+  → REAL TRANSFER, no burn, no mint
+
+cancel_order on a resting ask
+  → moves yes_escrow → canceller's YES ATA
+
+buy_no                                      buy_no
+  → mints fresh YES into user_yes               → mints fresh NO into user_no
+    (transient)                                   (this is the user's final position;
+  → immediately transfers user_yes →               never moves again inside buy_no)
+    bid_maker_yes (the resting bidder)
+
+sell_no                                     sell_no
+  → pulls existing YES from yes_escrow          → BURNS user's existing NO
+    into user_yes (transient)                     alongside the YES
+  → BURNS user_yes alongside user_no
+
+redeem_pair (pre-settlement)                redeem_pair
+  → burns user's YES                            → burns user's NO
+
+redeem at settlement                        redeem at settlement
+  → burns user's YES, pays $1 if               → burns user's NO, pays $1 if
+    YES won, $0 if NO won                        NO won, $0 if YES won
+
+SPL transfer (outside Meridian)             SPL transfer (outside Meridian)
+  → wallet-to-wallet, no Meridian               → wallet-to-wallet, no Meridian
+    instruction involved                          instruction involved
+```
+
+The "(no equivalent)" rows for NO are the structural source of the asymmetry. Because there is no NO order book and no NO matching, the only way an existing NO can leave one wallet **as part of a trade** is to be burned (in `sell_no` or `redeem_pair`). The buyer of NO gets a freshly minted token. The asymmetry pays for the vault invariant: every NO in circulation is matched to exactly one pair's worth of USDC in the vault, with no "secondhand NO" floating that the protocol does not know about.
+
+### The escrow shortcut in the atomic instructions
+
+The atomic `buy_no` and `sell_no` are slightly more efficient on chain than the manual three-step decompositions above. They skip the `yes_escrow` / `usdc_escrow` round trip that a resting order requires.
+
+- In `buy_no`, the freshly-minted YES goes user → bid maker directly (line 237-247 of `buy_no.rs`). The YES never sits in `yes_escrow` because there is no resting order — the YES exists only for the instant between `mint_to` and `transfer`.
+- In `sell_no`, the user's USDC payment goes straight to `ask_maker_usdc` (line 190-200 of `sell_no.rs`). It never sits in `usdc_escrow` because the take is immediate.
+
+Escrow accounts exist for **resting orders** that need to park collateral while waiting for a counterparty. Takes that consume an existing resting order can shortcut around the escrow because the maker's side is already in escrow and the taker's side is moving in the same instruction. Two token-program CPIs saved per atomic take, modest CU win, conceptually clean.
+
+### Why there is no second book
+
+Three reasons. Each one would otherwise add real cost.
+
+* **Storage**. The current `OrderBook` is 7,296 bytes (depth 64 per side). A second book doubles that, and Solana CPI account creation caps at 10KB per account, so two books per market either burn more lamports for rent on separate accounts or require a depth cut.
+* **Cranker work**. `match_orders` ([`match_orders.rs`](./programs/meridian/src/instructions/match_orders.rs)) crosses one resting bid against one resting ask per call. Two books means twice the cranker calls and twice the off-chain orchestration.
+* **Cross-book consistency invariant**. If a NO book existed independently, the sum of the best YES bid and the best NO bid could exceed $1, which is a free-money arbitrage at the protocol's expense (mint pair for $1, sell both legs for >$1, repeat). The program would have to police that sum on every order insertion. The single-book design removes that whole class of state machine.
+
+### Pricing: NO price = $1 − YES price, enforced by arbitrage
+
+The mint and redeem rails are the arbitrage rails. Pricing is pinned, not just observed.
+
+If `YES_price + NO_price > $1`, anyone can `mint_pair` for $1, sell the YES leg at market and the NO leg at market, and pocket the difference. They repeat until the prices fall to $1. If `YES_price + NO_price < $1`, anyone can buy a YES and a NO at market for less than $1, call `redeem_pair`, and receive $1 from the vault. They repeat until prices rise to $1. So in equilibrium, the two sum to exactly $1.
+
+The bid and ask side flip when crossing from YES to NO. The cheapest way to acquire NO is via the highest YES bid (the price you pay for NO is `$1 − best YES bid`). The most you receive selling NO is via the lowest YES ask (your proceeds are `$1 − best YES ask`). Spread width is preserved; the mid is reflected around $0.50.
+
+Concrete example. With YES best bid = $0.55 and YES best ask = $0.60: NO mark price is $0.425, the cheapest NO purchase costs $0.45 (via `buy_no` hitting the $0.55 YES bid), the most a NO seller receives is $0.40 (via `sell_no` lifting the $0.60 YES ask).
+
+### Capabilities, YES vs NO
+
+| Capability | YES | NO |
+|---|---|---|
+| Mint (paired with the other side) | yes (`mint_pair`) | yes (`mint_pair`) |
+| Burn for $1 pre-settlement (paired) | yes (`redeem_pair`) | yes (`redeem_pair`) |
+| Redeem at settlement | yes (`redeem`; winning side pays $1, losing side $0) | yes (`redeem`; same) |
+| Free SPL transfer | yes | yes |
+| Atomic IOC take-liquidity buy | `place_order(Bid, P)` posted at the best ask, cleared by next `match_orders` crank (no IOC mode in v1) | `buy_no(qty, min_bid_price_ticks)` — single-best-only fill against `bids[0]`, full `qty` or revert; `min_bid_price_ticks` is a FLOOR on the YES bid (not a No price); UI computes `100 − target_no_price` |
+| Atomic IOC take-liquidity sell | `place_order(Ask, P)` posted at the best bid, cleared by next `match_orders` crank | `sell_no(qty, max_ask_price_ticks)` — single-best-only fill against `asks[0]`, full `qty` or revert; `max_ask_price_ticks` is a CEILING on the YES ask (not a No proceeds price) |
+| Resting LIMIT buy at price P | `place_order(Bid, P)` — **one instruction**, locks `P * qty` USDC | `mint_pair(qty)` then `place_order(Ask, $1 − P, qty)` — **two instructions**, locks `$1 * qty` USDC until ask fills |
+| Resting LIMIT sell at price P | `place_order(Ask, P)` — **one instruction**, locks `qty` YES | `place_order(Bid, $1 − P, qty)` then `redeem_pair(qty)` after fill — **two instructions**, non-atomic gap between fill and redeem, locks `($1 − P) * qty` USDC |
+
+Settlement, redemption, transfer, and IOC market-take are fully symmetric. The asymmetry is concentrated in one place: posting a resting limit order to the book takes one instruction on the YES side and two on the NO side.
+
+### Caveats on the two-instruction NO limit-order paths
+
+These are ergonomic costs, not pricing-power costs. A NO holder negotiates price equally well; they just pay for it in instruction count and, on the buy side, in temporarily-locked capital.
+
+* **Buy NO at limit P, capital lockup.** The user mint-pairs for the full $1, even though they only "really" intend to spend `(1 − P)` on the NO. The other `P * qty` is parked as escrowed YES while the ask waits to be filled. If the ask never fills, the user can `cancel_order` to recover the YES, then `redeem_pair` to recover the $1. A hypothetical native "buy NO at limit P" instruction would escrow only `(1 − P) * qty`. The two-instruction route trades capital efficiency for design simplicity.
+* **Sell NO at limit P, non-atomicity gap.** The YES bid rests in the book; the NO sits in the user's wallet. `redeem_pair` is a separate call the user must submit after their bid fills. If settlement happens in the gap, the user holds the (YES, NO) pair into resolution; calling `redeem` on the winning side recovers $1 (the same amount `redeem_pair` would have), so the user is procedurally inconvenienced rather than economically harmed. A frontend or bot that watches for fills closes the gap to roughly one slot of latency.
+
+### What "the user signs" means, end to end
+
+Every state-changing call into the program requires a wallet signature. In `buy_no.rs` (and every other instruction), the Accounts struct declares `pub user: Signer<'info>`, which Anchor compiles to a runtime check that the transaction carries a valid signature from the account passed as `user`. In the UI this corresponds to the wallet popup ("Meridian · buy_no · Approve / Reject"): the user's browser wallet (Phantom, Solflare, Backpack via the Solana Wallet Standard) cryptographically signs the transaction bytes with the user's private key, then submits to a Solana validator. There is no daemon and no privileged service that signs on the user's behalf. The cranker (`match_orders`) is permissionless and signs only as itself, and it never mints anything; it only crosses an already-resting YES bid against an already-resting YES ask.
 
 ## Decisions table
 
