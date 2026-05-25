@@ -13,6 +13,11 @@ import { loadEnv } from "./lib/env.js";
 import { logger } from "./lib/logger.js";
 import { runMorningJob } from "./jobs/morning.js";
 import { runSettlementJob } from "./jobs/settlement.js";
+import { runExpirySweep } from "./jobs/expirySweep.js";
+import {
+  runCreateCustomMarket,
+  CreateCustomMarketError,
+} from "./jobs/createCustomMarket.js";
 
 const env = loadEnv();
 const startedAt = new Date().toISOString();
@@ -31,10 +36,20 @@ interface CronRunRecord {
 }
 let lastMorningRun: CronRunRecord | null = null;
 let lastSettlementRun: CronRunRecord | null = null;
+let lastExpirySweepRun: CronRunRecord | null = null;
 
 // Cron schedules in America/New_York. croner has sub-100ms drift.
 const MORNING_CRON = "0 8 * * 1-5";
 const SETTLEMENT_CRON = "5 16 * * 1-5";
+// Expiry sweep runs every 30 seconds, every day. The cadence is the
+// "how soon will my test market settle after expiry" knob. 30 seconds
+// keeps the interactive test feel responsive without spamming the RPC
+// node (the sweep does one `program.account.market.all()` call per tick,
+// plus a settle tx per expired-pending market). Cron expression
+// "*/30 * * * * *" is the croner extended-cron form (6 fields: sec min
+// hr dom mon dow); croner supports the leading seconds field when the
+// expression has 6 columns.
+const EXPIRY_SWEEP_CRON = "*/30 * * * * *";
 
 const morningJob = new Cron(MORNING_CRON, { timezone: env.TZ, name: "morning" }, async () => {
   // WTF guard: this looks like the catch-log-continue forbidden by
@@ -76,13 +91,45 @@ const settlementJob = new Cron(
   },
 );
 
+// Expiry sweep — runs every 30 seconds, no trading-day filter. Settles
+// any expired-pending market via Pyth-primary, settle_market_manual
+// fallback. See jobs/expirySweep.ts for the full rationale: this is the
+// mechanism that makes admin-created custom test markets auto-settle at
+// their custom expiry without operator intervention.
+//
+// Croner concurrency note: by default croner refuses to overlap two
+// invocations of the same Cron. So if a sweep tick takes 35 seconds
+// (longer than the 30-second cadence), the next tick is skipped, not
+// queued. That is the right default for this workload — duplicate
+// settlement attempts are wasted RPC calls.
+const expirySweepJob = new Cron(
+  EXPIRY_SWEEP_CRON,
+  { timezone: env.TZ, name: "expirySweep", protect: true },
+  async () => {
+    // Same WTF guard: croner unmounts the cron on throw. The sweep can
+    // and will fail intermittently (Pyth flakiness, RPC throttling), and
+    // we MUST keep the schedule alive across those failures. The error
+    // is recorded on lastExpirySweepRun so /health is self-diagnosing.
+    try {
+      const result = await runExpirySweep(env);
+      lastExpirySweepRun = { at: new Date().toISOString(), result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastExpirySweepRun = { at: new Date().toISOString(), error: message };
+      logger.error({ err: message }, "expiry sweep job threw");
+    }
+  },
+);
+
 logger.info(
   {
     morning: MORNING_CRON,
     settlement: SETTLEMENT_CRON,
+    expirySweep: EXPIRY_SWEEP_CRON,
     tz: env.TZ,
     morningNext: morningJob.nextRun()?.toISOString(),
     settlementNext: settlementJob.nextRun()?.toISOString(),
+    expirySweepNext: expirySweepJob.nextRun()?.toISOString(),
   },
   "crons scheduled",
 );
@@ -215,8 +262,10 @@ const server = http.createServer((req, res) => {
         now: new Date().toISOString(),
         lastMorningRun,
         lastSettlementRun,
+        lastExpirySweepRun,
         morningNext: morningJob.nextRun()?.toISOString() ?? null,
         settlementNext: settlementJob.nextRun()?.toISOString() ?? null,
+        expirySweepNext: expirySweepJob.nextRun()?.toISOString() ?? null,
         cluster: env.SOLANA_CLUSTER,
       }),
     );
@@ -267,9 +316,171 @@ const server = http.createServer((req, res) => {
       });
     return;
   }
+  // ===== Admin-only: create a custom market on demand. =====
+  //
+  // POST /admin/create-market with JSON body
+  //   { ticker: "AAPL", strikeUsd: 309, expirySecondsFromNow: 120 }
+  // and header x-admin-secret: <ADMIN_API_SECRET>.
+  //
+  // CORS preflight is supported so the Next.js frontend can call this
+  // from the browser (browsers preflight any POST with non-simple headers
+  // like x-admin-secret).
+  if (req.url === "/admin/create-market" && req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type, x-admin-secret",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return;
+  }
+  if (req.url === "/admin/create-market" && req.method === "POST") {
+    handleCreateMarket(req, res).catch((err) => {
+      // Top-level safety net. Any failure inside handleCreateMarket that
+      // escapes its own try/catch is a programmer bug; surface it
+      // verbatim instead of returning a generic 500 so the next
+      // diagnostic round is short.
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, "/admin/create-market top-level error");
+      if (!res.headersSent) {
+        res.writeHead(500, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+        });
+        res.end(JSON.stringify({ error: "internal", message }));
+      }
+    });
+    return;
+  }
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found\n");
 });
+
+/**
+ * Handle POST /admin/create-market. Streams the body, parses, authorizes,
+ * runs the on-chain create+init flow, returns a JSON result the frontend
+ * can use to redirect the admin to the new trade page.
+ *
+ * Error mapping:
+ *   - missing/empty ADMIN_API_SECRET env -> 503 (server not configured)
+ *   - missing/wrong x-admin-secret header -> 401
+ *   - invalid JSON body or missing fields -> 400
+ *   - CreateCustomMarketError.code starting with INVALID_ -> 400
+ *   - CreateCustomMarketError.code CONFIG_MISSING -> 503
+ *   - CreateCustomMarketError.code *_TX_FAILED -> 502 (upstream Solana failure)
+ *   - anything else -> 500
+ */
+async function handleCreateMarket(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  const corsHeaders = {
+    "access-control-allow-origin": "*",
+  } as const;
+  const send = (status: number, body: object): void => {
+    res.writeHead(status, {
+      "content-type": "application/json",
+      ...corsHeaders,
+    });
+    res.end(JSON.stringify(body));
+  };
+
+  // ===== Auth gate. =====
+  if (!env.ADMIN_API_SECRET) {
+    return send(503, {
+      error: "admin_api_secret_unset",
+      message:
+        "ADMIN_API_SECRET env var is not set on the automation server. " +
+        "Set it to a strong shared secret and restart, then set the matching " +
+        "NEXT_PUBLIC_ADMIN_API_SECRET on the frontend.",
+    });
+  }
+  const supplied = req.headers["x-admin-secret"];
+  const suppliedStr = Array.isArray(supplied) ? supplied[0] : supplied;
+  if (!suppliedStr || suppliedStr !== env.ADMIN_API_SECRET) {
+    return send(401, {
+      error: "unauthorized",
+      message:
+        "missing or invalid x-admin-secret header. The header value must " +
+        "match the ADMIN_API_SECRET env var on the automation server.",
+    });
+  }
+
+  // ===== Body parse. =====
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+    // Cap the body size at 8 KB. The expected payload is well under 1 KB.
+    if (chunks.reduce((s, c) => s + c.length, 0) > 8 * 1024) {
+      return send(413, {
+        error: "body_too_large",
+        message: "request body exceeded 8KB; expected a small JSON object",
+      });
+    }
+  }
+  const bodyStr = Buffer.concat(chunks).toString("utf8");
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyStr);
+  } catch (err) {
+    return send(400, {
+      error: "invalid_json",
+      message: `request body is not valid JSON: ${String(err)}`,
+    });
+  }
+  if (typeof body !== "object" || body === null) {
+    return send(400, {
+      error: "invalid_body_shape",
+      message: "request body must be a JSON object",
+    });
+  }
+  const { ticker, strikeUsd, expirySecondsFromNow } = body as Record<string, unknown>;
+  if (typeof ticker !== "string") {
+    return send(400, {
+      error: "missing_field",
+      message: "field 'ticker' is required and must be a string",
+    });
+  }
+  if (typeof strikeUsd !== "number") {
+    return send(400, {
+      error: "missing_field",
+      message: "field 'strikeUsd' is required and must be a number",
+    });
+  }
+  if (typeof expirySecondsFromNow !== "number") {
+    return send(400, {
+      error: "missing_field",
+      message: "field 'expirySecondsFromNow' is required and must be a number",
+    });
+  }
+
+  // ===== Run. =====
+  try {
+    const result = await runCreateCustomMarket(env, {
+      ticker,
+      strikeUsd,
+      expirySecondsFromNow,
+    });
+    logger.info({ result }, "/admin/create-market succeeded");
+    return send(200, result);
+  } catch (err) {
+    if (err instanceof CreateCustomMarketError) {
+      if (err.code.startsWith("INVALID_")) {
+        return send(400, { error: err.code.toLowerCase(), message: err.message });
+      }
+      if (err.code === "CONFIG_MISSING") {
+        return send(503, { error: "config_missing", message: err.message });
+      }
+      if (err.code === "CREATE_TX_FAILED" || err.code === "INIT_BOOK_TX_FAILED") {
+        return send(502, { error: err.code.toLowerCase(), message: err.message });
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err: message }, "/admin/create-market unexpected error");
+    return send(500, { error: "unexpected", message });
+  }
+}
 
 server.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "meridian automation listening");
@@ -280,6 +491,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     logger.info({ signal: sig }, "shutting down");
     morningJob.stop();
     settlementJob.stop();
+    expirySweepJob.stop();
     server.close(() => process.exit(0));
   });
 }
