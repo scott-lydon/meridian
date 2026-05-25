@@ -15,6 +15,7 @@
 // affordance exists.
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import {
@@ -77,6 +78,20 @@ export default function AdminPage() {
             <span className="font-semibold text-yes">Already signed in.</span> The 🧪 DEV button
             should be visible in the header.
           </p>
+          {/*
+            Admin-only tools live here. Today: just the create-custom-market
+            page. As more admin affordances ship, list them as a vertical
+            stack of links. Keep this section sparse — anything that does
+            NOT require admin can live elsewhere.
+          */}
+          <div className="mb-4 flex flex-col items-stretch gap-2">
+            <Link
+              href="/admin/create-market"
+              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accentHover"
+            >
+              Create a custom market →
+            </Link>
+          </div>
           <button
             type="button"
             onClick={signOut}
