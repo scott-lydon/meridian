@@ -241,8 +241,25 @@ sequenceDiagram
       Meridian has <span class="text-indigo-300 font-semibold">one order book per market</span>. It trades YES tokens priced in USDC. The "NO view" in the user interface is a pure transform of the same book with prices mirrored across $1. NO trades happen in a single signed transaction via the atomic <code class="text-xs text-indigo-300">buy_no</code> and <code class="text-xs text-indigo-300">sell_no</code> instructions, which bundle a pair mint or burn with a fill against the book.
     </p>
     <p class="mb-6 max-w-3xl text-slate-400">
-      Each step below shows the five places state lives: three user wallets (John, Kerry, Bob) and two program PDAs (the collateral vault and the order book). A glowing border means the bucket changed this step. Inline arrows like <span class="font-mono text-indigo-300">$0.60 ← $1.00</span> show the previous value.
+      Each step below shows the five places state lives: three user keypairs (John, Kerry, Bob), each represented by the bundle of token accounts their keypair owns, plus two program-owned PDAs (the market PDA's USDC vault, and the order book PDA with its two escrow token accounts). A glowing border means the bucket changed this step. Inline arrows like <span class="font-mono text-indigo-300">$0.60 ← $1.00</span> show the previous value.
     </p>
+
+    <!-- On-chain reality + vocabulary explainers (so the cards below are unambiguous) -->
+    <div class="grid gap-4 lg:grid-cols-2 mb-6">
+      <div class="panel p-5 text-sm text-slate-300">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">On-chain reality · wallet vs ATA</div>
+        <p class="mb-2">A "wallet" (Phantom, Solflare) is just a keypair. The keypair owns exactly one <span class="font-semibold text-slate-100">System Account</span>, which holds the SOL balance and pays rent and fees. <span class="font-semibold text-slate-100">Fungible token balances never live in the System Account.</span></p>
+        <p class="mb-2">Each SPL mint a user holds requires its own <span class="font-semibold text-slate-100">Token Account</span>, whose <code class="text-xs text-indigo-300">owner</code> field points at the keypair's pubkey. The conventional, deterministically-derived address for the pair (keypair, mint) is the <span class="font-semibold text-slate-100">Associated Token Account (ATA)</span>. Solflare aggregates all of a keypair's ATAs into one UI screen, so the "USDC: $0.60" row inside Kerry's card on these diagrams is actually <em>Kerry's USDC ATA</em>, not "USDC inside her wallet".</p>
+        <p>An ATA must <span class="font-semibold text-slate-100">exist</span> before tokens can land in it. The first time anyone sends YES to Kerry, the transaction includes a <code class="text-xs text-indigo-300">createAssociatedTokenAccountIdempotent</code> instruction. Rent for a 165-byte Token Account is about <span class="font-mono">0.00203 SOL</span>, one time, refundable on close.</p>
+      </div>
+      <div class="panel p-5 text-sm text-slate-300">
+        <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-300">Order book vocabulary</div>
+        <p class="mb-2"><span class="font-semibold text-slate-100">Bid</span> = a parked order to <em>buy</em> at a maximum acceptable price. "Kerry's bid at 40¢" means Kerry will pay at most 40¢ per YES.</p>
+        <p class="mb-2"><span class="font-semibold text-slate-100">Ask</span> (also called <em>offer</em>) = a parked order to <em>sell</em> at a minimum acceptable price. "John's ask at 40¢" means John will sell for at least 40¢ per YES.</p>
+        <p class="mb-2"><span class="font-semibold text-slate-100">Cross</span> = when an incoming bid lands at or above the best resting ask (or an incoming ask lands at or below the best resting bid), the matching engine fills immediately. By price-time priority, the fill price is the <span class="font-semibold text-slate-100">resting</span> order's price, not the incoming order's.</p>
+        <p class="text-xs text-slate-400">So in step 2 below, John's ask at 40¢ meets Kerry's resting bid at 40¢ and the trade clears at 40¢ on the spot.</p>
+      </div>
+    </div>
 
     <!-- Legend -->
     <div class="panel p-4 mb-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
@@ -259,7 +276,7 @@ sequenceDiagram
 
     <h3 class="mt-12 mb-3 text-2xl font-semibold">Step 5 · Resolution (two endings)</h3>
     <p class="mb-6 max-w-3xl text-slate-400">
-      Same starting state as the end of step 4: two pairs outstanding, collateral vault holding $2. Oracle posts an outcome. Winning side burns its tokens and pulls $1 per token out of the vault. Losing side becomes worthless dust.
+      Same starting state as the end of step 4: two pairs outstanding, the market PDA's USDC vault ATA holding $2. The oracle (Pyth) posts an outcome. Each winning holder calls <code class="text-xs text-indigo-300">redeem(side, qty)</code>: the program burns N tokens of the winning mint from the holder's winning-side ATA, then transfers N USDC from the vault ATA to the holder's USDC ATA. Losing-side tokens remain in their ATAs as worthless dust; they can be closed for the rent refund but the mint authority prevents any further redemption.
     </p>
     <div id="storage-resolution" class="grid gap-6 lg:grid-cols-2"></div>
 
@@ -290,19 +307,25 @@ sequenceDiagram
       <div class="mb-3 text-xs font-semibold uppercase tracking-wider text-indigo-300">The atomic NO path, drawn</div>
       <pre class="mermaid">
 flowchart LR
-  Bob["Bob's wallet<br/>$1 USDC"]
-  Vault["Collateral vault<br/>(holds USDC)"]
-  Mints["YES mint + NO mint"]
-  Book["Order book<br/>(YES priced in USDC)"]
-  Maker["Bid maker (Kerry)<br/>USDC escrow"]
-  Bob -->|1. mint_pair: $1 in| Vault
-  Vault -.->|2. authorize mint| Mints
-  Mints -->|3. 1 YES + 1 NO out| Bob
-  Bob -->|4. sell just-minted YES| Book
-  Book -->|5. fill best bid| Maker
-  Maker -->|6. release escrowed USDC| Bob
+  BobUSDC["<img src='https://cdn.simpleicons.org/solflare/FC8D1B' width='14'/> Bob's USDC ATA<br/>$1 USDC"]
+  BobYES["Bob's YES ATA<br/>(init_if_needed)"]
+  BobNO["Bob's NO ATA<br/>(init_if_needed)"]
+  Vault["Market PDA's<br/>USDC vault ATA"]
+  YesMint["YES mint<br/>(SPL Token)"]
+  NoMint["NO mint<br/>(SPL Token)"]
+  Book["Order book PDA<br/>(matching + slabs)"]
+  Escrow["Book PDA's USDC escrow ATA<br/>(holds Kerry's parked $0.50 bid)"]
+  KerryYES["Kerry's YES ATA"]
+  BobUSDC -->|"1. mint_pair: transfer $1"| Vault
+  Vault -.->|"2. mint authority CPI"| YesMint
+  Vault -.->|"2. mint authority CPI"| NoMint
+  YesMint -->|"3a. mint 1 YES"| BobYES
+  NoMint -->|"3b. mint 1 NO"| BobNO
+  BobYES -->|"4. transfer 1 YES (taker fills resting bid)"| KerryYES
+  Book -.->|"5. remove Kerry's bid entry from slab"| Book
+  Escrow -->|"6. release escrowed $0.50"| BobUSDC
       </pre>
-      <p class="mt-3 text-xs text-slate-500">All six legs land in one signed transaction. If the best bid is gone or below <span class="font-mono">min_bid_price_ticks</span>, the whole thing reverts. Net for Bob: holds 1 NO, paid <span class="font-mono">$1.00 − bid_price</span>.</p>
+      <p class="mt-3 text-xs text-slate-500">All six effects land in one signed transaction. If the best resting bid is gone or below <span class="font-mono">min_bid_price_ticks</span>, the whole transaction reverts and no token account changes. Net for Bob: holds 1 NO in his NO ATA, paid <span class="font-mono">$1.00 − bid_price</span> ($0.50 in this example). Note that the YES transfer goes directly from Bob's freshly-minted YES ATA to Kerry's YES ATA — the book's YES escrow ATA is not touched because Kerry's resting order was a bid, not an ask.</p>
     </div>
   </section>
 
@@ -404,7 +427,7 @@ flowchart LR
       {
         n: 0,
         headline: "Setup · John calls mint_pair($1)",
-        why: "John signs mint_pair(1). His $1 USDC moves into the collateral vault. The program mints 1 YES + 1 NO into John's wallet ATAs. Pairs outstanding goes from 0 to 1. Kerry and Bob start with $1 each, untouched.",
+        why: "John signs mint_pair(1). $1 USDC transfers from John's USDC ATA into the market PDA's USDC vault ATA (the collateral vault). The program then mints 1 YES into John's YES ATA and 1 NO into John's NO ATA, creating either ATA with createAssociatedTokenAccountIdempotent if it does not exist yet (rent ~0.00203 SOL, paid by John once per mint). Pairs outstanding goes from 0 to 1. Kerry and Bob start with $1 each in their USDC ATAs, untouched.",
         state: {
           john:  { yes: 1, no: 1, usdc: 0.00, sub: "Minted 1 pair", before: { yes: 0, no: 0, usdc: 1.00 } },
           kerry: { yes: 0, no: 0, usdc: 1.00, sub: "Will buy YES" },
@@ -416,7 +439,7 @@ flowchart LR
       {
         n: 1,
         headline: "Kerry rests a bid · place_order(Bid, 40¢, qty=1)",
-        why: "Kerry's $0.40 moves from her USDC ATA into the book's USDC escrow account. A bid entry is inserted in the bids slab. No tokens move yet. Cancelling now would return her $0.40.",
+        why: "Kerry posts a bid: she's willing to pay up to 40¢ for 1 YES. $0.40 USDC transfers from Kerry's USDC ATA into the order book PDA's USDC escrow ATA (which is just a regular SPL Token Account whose owner field is the book PDA). A bid entry is inserted in the bids slab. No YES tokens move yet, because there is no counterparty yet. Cancelling now would refund the escrowed $0.40 back to Kerry's USDC ATA.",
         state: {
           john:  { yes: 1, no: 1, usdc: 0.00, sub: "Will sell YES" },
           kerry: { yes: 0, no: 0, usdc: 0.60, sub: "Bid resting", before: { usdc: 1.00 } },
@@ -428,7 +451,7 @@ flowchart LR
       {
         n: 2,
         headline: "John fills · place_order(Ask, 40¢, qty=1) crosses",
-        why: "John submits a YES ask at 40¢. The matching engine crosses it against Kerry's resting bid. John's 1 YES routes through the book's YES escrow and out to Kerry's YES ATA. Kerry's $0.40 escrow routes to John's USDC ATA. Book empties. Collateral vault untouched, because no pair was minted or burned.",
+        why: "John submits a YES ask at 40¢, meaning he'll sell 1 YES for at least 40¢. The matching engine sees that Kerry's resting bid is exactly 40¢, so the two cross immediately at the resting price of 40¢. The program does two direct token transfers in one instruction: (a) 1 YES from John's YES ATA straight to Kerry's YES ATA, creating Kerry's YES ATA with init_if_needed if she's never held YES before; and (b) $0.40 USDC from the book PDA's USDC escrow ATA (where Kerry's bid had been parked) to John's USDC ATA. Note: the book's YES escrow ATA is NOT touched — it only holds tokens when resting asks are parked, and Kerry's order was a bid. Kerry's bid entry is removed from the bids slab. Book empties. Market PDA's USDC vault is untouched, because no pair was minted or burned.",
         state: {
           john:  { yes: 0, no: 1, usdc: 0.40, sub: "Sold YES, holds NO", before: { yes: 1, usdc: 0.00 } },
           kerry: { yes: 1, no: 0, usdc: 0.60, sub: "Got YES", before: { yes: 0 } },
@@ -440,7 +463,7 @@ flowchart LR
       {
         n: 3,
         headline: "Kerry rests another bid · place_order(Bid, 50¢, qty=1)",
-        why: "Kerry escrows another $0.50 into the book as a fresh bid. In the user interface's NO panel, this same order is rendered as \"Kerry willing to sell NO at 50¢\" because the panel mirrors prices across $1. Storage is identical to step 1, just a higher price.",
+        why: "Kerry posts another bid: she'll pay up to 50¢ for 1 YES. $0.50 USDC transfers from her USDC ATA into the book PDA's USDC escrow ATA. In the user interface's NO panel, this same order is rendered as \"Kerry willing to sell NO at 50¢\" because the NO panel mirrors prices across $1 (a bid to buy YES at 50¢ is mathematically the same as an offer to sell NO at 50¢). Storage shape is identical to step 1, just at a higher price.",
         state: {
           john:  { yes: 0, no: 1, usdc: 0.40, sub: "Holds NO" },
           kerry: { yes: 1, no: 0, usdc: 0.10, sub: "Bid resting", before: { usdc: 0.60 } },
@@ -452,7 +475,7 @@ flowchart LR
       {
         n: 4,
         headline: "Bob buys NO atomically · buy_no(qty=1, min_bid=50¢)",
-        why: "One instruction. One signature. The program pulls Bob's $1 into the collateral vault, mints a fresh (YES, NO) pair to Bob, routes Bob's just-minted YES to Kerry (the bid maker), routes Kerry's $0.50 escrow to Bob, and removes Kerry's bid. Bob keeps the NO. Net cost to Bob = $1.00 − $0.50 = $0.50. Pairs outstanding goes from 1 to 2.",
+        why: "One instruction. One signature. Five token transfers in a single atomic transaction: (1) $1 USDC from Bob's USDC ATA into the market PDA's USDC vault ATA; (2) 1 YES minted into Bob's YES ATA (created with init_if_needed); (3) 1 NO minted into Bob's NO ATA (created with init_if_needed); (4) 1 YES transferred straight out of Bob's YES ATA to Kerry's YES ATA, satisfying Kerry's resting bid; (5) $0.50 USDC out of the book PDA's USDC escrow ATA (where Kerry's 50¢ bid was parked) into Bob's USDC ATA. Kerry's bid entry is removed from the bids slab. Bob keeps the NO. Net cost to Bob = $1.00 − $0.50 = $0.50. Pairs outstanding goes from 1 to 2. If the best bid had been gone or below 50¢, the whole transaction would revert and no state would change.",
         state: {
           john:  { yes: 0, no: 1, usdc: 0.40, sub: "Holds NO" },
           kerry: { yes: 2, no: 0, usdc: 0.10, sub: "Got more YES", before: { yes: 1 } },
@@ -467,7 +490,7 @@ flowchart LR
       {
         n: "5a",
         headline: "NO wins · John and Bob redeem",
-        why: "Oracle posts NO as the winning outcome. Each NO holder calls redeem: 1 NO burns, $1.00 USDC transfers out of the collateral vault to their ATA. Kerry's 2 YES are now worthless dust. Vault drains to $0; both pairs have been redeemed.",
+        why: "Oracle posts NO as the winning outcome. Each NO holder calls redeem(NO, 1): the program burns 1 NO from the holder's NO ATA (token-account amount goes from 1 to 0; mint supply drops by 1) and transfers $1.00 USDC from the market PDA's USDC vault ATA to the holder's USDC ATA. Kerry's 2 YES sit in her YES ATA as worthless dust (the program rejects redeem(YES, ...) once the outcome is NO). Vault drains to $0; both pairs have been redeemed.",
         sum: "Final P&L · John +$0.40 · Kerry −$0.90 · Bob +$0.50 · sum = $0.00. Wallet total after = wallet total before = $3.00. Zero-sum invariant holds.",
         state: {
           john:  { yes: 0, no: 0, usdc: 1.40, sub: "Winner (+$0.40)", before: { no: 1, usdc: 0.40 } },
@@ -480,7 +503,7 @@ flowchart LR
       {
         n: "5b",
         headline: "YES wins · Kerry redeems",
-        why: "Oracle posts YES as the winning outcome. Kerry burns her 2 YES and pulls $2.00 out of the collateral vault. John's 1 NO and Bob's 1 NO are worthless dust. Vault drains to $0.",
+        why: "Oracle posts YES as the winning outcome. Kerry calls redeem(YES, 2): the program burns 2 YES from Kerry's YES ATA and transfers $2.00 USDC from the market PDA's USDC vault ATA to Kerry's USDC ATA. John's 1 NO sits in his NO ATA as worthless dust, as does Bob's 1 NO. Vault drains to $0.",
         sum: "Final P&L · John −$0.60 · Kerry +$1.10 · Bob −$0.50 · sum = $0.00. Wallet total after = wallet total before = $3.00. Zero-sum invariant holds.",
         state: {
           john:  { yes: 0, no: 1, usdc: 0.40, sub: "NO worthless",     note: "1 NO = worthless dust" },
@@ -521,12 +544,16 @@ flowchart LR
       const yesPrev = "yes" in prev ? prev.yes : null;
       const noPrev  = "no"  in prev ? prev.no  : null;
       const usdcPrev = "usdc" in prev ? money(prev.usdc) : null;
+      // The three rows below are NOT "balances in the wallet"; each row is a
+      // separate on-chain Token Account (ATA) whose `owner` field is this
+      // keypair's pubkey. Solflare aggregates them into one UI screen.
       return `<div class="bucket ${changed ? "bucket-changed" : ""}">
-        <div class="bucket-title">${name}</div>
-        <div class="bucket-sub">${s.sub || ""}</div>
-        ${row("YES",  "dot-yes",  s.yes,        yesPrev)}
-        ${row("NO",   "dot-no",   s.no,         noPrev)}
-        ${row("USDC", "dot-usdc", money(s.usdc), usdcPrev)}
+        <div class="bucket-title">${name}'s keypair</div>
+        <div class="bucket-sub">Keypair, with these associated token accounts (ATAs)</div>
+        <div class="mb-2 text-xs italic" style="color:#94a3b8">${s.sub || ""}</div>
+        ${row("YES ATA",  "dot-yes",  s.yes,        yesPrev)}
+        ${row("NO ATA",   "dot-no",   s.no,         noPrev)}
+        ${row("USDC ATA", "dot-usdc", money(s.usdc), usdcPrev)}
         ${s.note ? `<div class="mt-2 text-xs" style="color:#f87171;font-style:italic">${s.note}</div>` : ""}
       </div>`;
     }
@@ -536,7 +563,7 @@ flowchart LR
       const prev = s.before || {};
       return `<div class="bucket ${changed ? "bucket-changed" : ""}">
         <div class="bucket-title">Collateral vault</div>
-        <div class="bucket-sub">Market PDA · backs every outstanding (YES, NO) pair</div>
+        <div class="bucket-sub">USDC ATA owned by the Market PDA · backs every outstanding (YES, NO) pair</div>
         ${row("USDC", "dot-usdc", money(s.usdc), "usdc" in prev ? money(prev.usdc) : null)}
         ${plainRow("Pairs outstanding", s.pairs, "pairs" in prev ? prev.pairs : null)}
       </div>`;
@@ -552,13 +579,14 @@ flowchart LR
       return `<div class="bucket ${changed ? "bucket-changed" : ""}">
         <div class="bucket-title">Order book</div>
         <div class="bucket-sub">Book PDA · one per market · trades YES, prices in USDC</div>
-        <div class="text-xs uppercase tracking-wider mb-1" style="color:#64748b">Bids (buy YES)</div>
+        <div class="text-xs uppercase tracking-wider mb-1" style="color:#64748b">Bids (buy YES · max price)</div>
         ${renderOrders(s.bids || [])}
-        <div class="text-xs uppercase tracking-wider mt-2 mb-1" style="color:#64748b">Asks (sell YES)</div>
+        <div class="text-xs uppercase tracking-wider mt-2 mb-1" style="color:#64748b">Asks (sell YES · min price)</div>
         ${renderOrders(s.asks || [])}
         <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid rgba(45,54,84,0.6);">
-          ${row("USDC escrow", "dot-usdc", money(s.usdcEscrow), "usdcEscrow" in prev ? money(prev.usdcEscrow) : null)}
-          ${row("YES escrow",  "dot-yes",  s.yesEscrow + " YES", "yesEscrow" in prev ? prev.yesEscrow + " YES" : null)}
+          <div class="mb-1 text-xs italic" style="color:#94a3b8">Two token accounts owned by the Book PDA:</div>
+          ${row("USDC escrow ATA", "dot-usdc", money(s.usdcEscrow), "usdcEscrow" in prev ? money(prev.usdcEscrow) : null)}
+          ${row("YES escrow ATA",  "dot-yes",  s.yesEscrow + " YES", "yesEscrow" in prev ? prev.yesEscrow + " YES" : null)}
         </div>
       </div>`;
     }
@@ -594,13 +622,13 @@ flowchart LR
             <p class="mt-1 text-sm text-slate-400">${step.why}</p>
           </div>
         </div>
-        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Wallets (user ATAs)</div>
+        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">User keypairs (their Token Accounts shown)</div>
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 mb-5">
           ${walletCard("John",  s.john)}
           ${walletCard("Kerry", s.kerry)}
           ${walletCard("Bob",   s.bob)}
         </div>
-        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Program PDAs</div>
+        <div class="text-xs uppercase tracking-wider mb-2" style="color:#64748b">Program-Derived Addresses (PDAs) and their Token Accounts</div>
         <div class="grid gap-3 sm:grid-cols-1 lg:grid-cols-2">
           ${vaultCard(s.vault)}
           ${orderBookCard(s.book)}
