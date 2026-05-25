@@ -45,6 +45,11 @@ import {
 } from "@solana/wallet-adapter-base";
 import { QueryClientProvider } from "@tanstack/react-query";
 
+import {
+  PhantomWalletAdapter,
+  SolflareWalletAdapter,
+} from "@solana/wallet-adapter-wallets";
+
 import { cluster } from "@/lib/cluster";
 import { queryClient } from "@/lib/queryClient";
 import { WalletSetupChecklist } from "@/components/WalletSetupChecklist";
@@ -180,11 +185,36 @@ function WalletWatcher({ onTimeout }: { onTimeout: (message: string) => void }) 
 }
 
 export function MeridianProviders({ children }: { readonly children: ReactNode }) {
-  // Empty wallets array — modern Phantom / Solflare / Backpack register via
-  // the Wallet Standard and the wallet-adapter react package discovers them
-  // automatically. See the file-top WTF block for why explicit adapters were
-  // removed.
-  const wallets = useMemo(() => [], []);
+  // Belt-AND-suspenders wallet discovery (2026-05-25 Safari fix).
+  //
+  // The previous setup was `wallets={[]}` and relied entirely on the Solana
+  // Wallet Standard to auto-discover registered wallets. That works on
+  // Chromium / Firefox where Phantom and Solflare publish a Wallet Standard
+  // registration synchronously on every page. It does NOT work on Safari:
+  // Phantom's Safari WebExtension (and Solflare's, as of late 2026) injects
+  // its provider at `window.phantom.solana` / `window.solflare` but does NOT
+  // publish the Wallet Standard handshake the same way the Chromium build
+  // does. The picker's "Detected wallets" list filters by `WalletReadyState
+  // .Installed`, so Safari users saw an empty Detected section and were
+  // told to install a wallet they already had installed.
+  //
+  // The fix: include the explicit `PhantomWalletAdapter` and
+  // `SolflareWalletAdapter` alongside whatever Wallet Standard discovers.
+  // Each adapter probes its own injected global (e.g. PhantomWalletAdapter
+  // checks `window.phantom?.solana?.isPhantom` and SolflareWalletAdapter
+  // checks `window.solflare?.isSolflare`) and flips its `readyState` to
+  // `Installed` independently of the Wallet Standard handshake. The picker
+  // de-duplicates by adapter `name`, so on Chromium where Wallet Standard
+  // ALSO surfaces them you still see exactly one Phantom row, not two.
+  //
+  // The historical concern that prompted the empty-wallets approach
+  // ("Phantom v23 removed window.solana") was specific to the old
+  // `window.solana` global; the v0.9.29 PhantomWalletAdapter targets
+  // `window.phantom.solana` and is not affected.
+  const wallets = useMemo(
+    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
+    [],
+  );
 
   // Custom Connection with WS endpoint for live account subscriptions.
   const endpoint = cluster.rpcUrl;

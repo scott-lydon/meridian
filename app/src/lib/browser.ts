@@ -72,7 +72,16 @@ export function findExtensionInstructions(
     case "firefox":
       return `In Firefox, extension icons usually appear in the toolbar automatically. If you don't see ${extensionName}, click the hamburger menu (three lines, top-right) → "Add-ons and themes" → "Extensions" and make sure ${extensionName} is enabled.`;
     case "safari":
-      return `Safari does NOT have official Solana wallet extension support for ${extensionName} on desktop as of 2026. Use Chrome, Brave, Edge, or Firefox.`;
+      // Updated 2026-05-25: Phantom ships a real Safari WebExtension
+      // (distributed via the Mac App Store as "Phantom for Safari"), so the
+      // previous flat "Safari has no support" message was wrong. Phantom on
+      // Safari injects its provider at `window.phantom.solana`; the
+      // PhantomWalletAdapter detects it the same way it does on Chromium.
+      // Solflare's Safari extension is in beta and detection is less
+      // reliable; we still steer Solflare users toward a Chromium browser.
+      return extensionName.toLowerCase() === "phantom"
+        ? `On Safari (macOS), install Phantom for Safari from the Mac App Store, then enable the extension under Safari → Settings → Extensions and allow it on this site. After enabling, reload this page. Phantom's Safari extension is the only Solana wallet extension currently shipped for Safari; Solflare and Backpack are Chromium-only.`
+        : `${extensionName} does not ship a Safari extension. For ${extensionName}, use Chrome, Brave, Edge, or Firefox. Phantom is the one Solana wallet that does support Safari (Mac App Store).`;
     case "unknown":
       return `If you don't see the ${extensionName} icon in your toolbar, look for an "Extensions" menu in your browser's toolbar (usually top-right, often a puzzle-piece icon) and select ${extensionName} from the list.`;
   }
@@ -80,9 +89,22 @@ export function findExtensionInstructions(
 
 /**
  * True if the detected browser supports the wallet extensions Meridian
- * uses (Phantom + Solflare). Used to surface a hard-stop message for
- * Safari users so they don't follow useless install steps.
+ * uses (Phantom + Solflare). Used to control whether a hard-stop banner is
+ * surfaced inside the NetworkBadge popover.
+ *
+ * Safari is included as of 2026-05-25 because Phantom now ships a real
+ * Safari WebExtension on the Mac App Store; suppressing the hard-stop is
+ * accurate but the install instructions for Safari are Phantom-specific
+ * (see `findExtensionInstructions`). Solflare's Safari extension is in
+ * beta and unreliable, so the per-row Solflare copy steers Safari users
+ * to Chromium for Solflare while still letting them pick Phantom here.
  */
 export function isWalletSupportedBrowser(b: DetectedBrowser): boolean {
-  return b === "chrome" || b === "brave" || b === "edge" || b === "firefox";
+  return (
+    b === "chrome" ||
+    b === "brave" ||
+    b === "edge" ||
+    b === "firefox" ||
+    b === "safari"
+  );
 }
