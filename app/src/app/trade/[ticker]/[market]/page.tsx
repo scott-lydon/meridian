@@ -757,25 +757,16 @@ export default function TradePage({
         </div>
       )}
 
-      {/* Payoff display (PRD §Key UI Elements) */}
-      {m && m.outcome === "Pending" && (
-        <section className="mb-6 rounded-2xl border border-accent/40 bg-accent/10 p-4 text-sm">
-          <p className="text-muted">
-            <span className="font-semibold text-text">For each Yes token: </span>
-            you pay <span className="font-mono">$X</span> (the ask). You win{" "}
-            <span className="font-mono">$1.00</span> if <span className="font-semibold">{ticker}</span>{" "}
-            closes at or above <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> at 16:00 ET today.
-            Otherwise the token pays <span className="font-mono">$0.00</span>.
-          </p>
-          <p className="mt-1 text-muted">
-            <span className="font-semibold text-text">For each No token: </span>
-            you pay <span className="font-mono">$1.00 − Yes price</span>. You win{" "}
-            <span className="font-mono">$1.00</span> if <span className="font-semibold">{ticker}</span>{" "}
-            closes <span className="font-semibold">below</span>{" "}
-            <span className="font-mono">{formatUsdc(m.strikeUsd)}</span>.
-          </p>
-        </section>
-      )}
+      {/* The standalone "For each Yes token / For each No token" payoff
+          banner that previously lived here was removed on 2026-05-26 in
+          favour of moving the same payoff sentence into the Buy Yes and
+          Buy No InfoTip popovers (the ⓘ icons on those buttons), so the
+          rules now live alongside the mechanism in the same one-click
+          tooltip. Reported by the user as "redundant to the info
+          buttons under the buy/sell boxes." The InfoTip payoff
+          paragraphs are conditional on `m` being non-null, so an
+          unsettled / loading market still renders the rest of the
+          tooltip without crashing. */}
 
       {/* Position summary.
           WTF heads-up: the pills below show the connected wallet's SPL token
@@ -1618,6 +1609,15 @@ export default function TradePage({
                 side="top"
                 className="absolute right-1.5 top-1.5 text-yes"
               >
+                {m && m.outcome === "Pending" && (
+                  <p className="rounded bg-yes/10 px-2 py-1.5 text-text">
+                    <strong>Payoff:</strong> each YES token pays{" "}
+                    <span className="font-mono">$1.00</span> if{" "}
+                    <span className="font-semibold">{ticker}</span> closes at or above{" "}
+                    <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> at 16:00 ET today.
+                    Otherwise it pays <span className="font-mono">$0.00</span>.
+                  </p>
+                )}
                 <p>
                   Posts a resting limit <strong>BID</strong> on the YES order book at your chosen price (cents).
                   Escrows your USDC into the book&apos;s <code className="text-indigo-300">usdc_escrow</code>.
@@ -1666,6 +1666,16 @@ export default function TradePage({
                 side="top"
                 className="absolute right-1.5 top-1.5 text-no"
               >
+                {m && m.outcome === "Pending" && (
+                  <p className="rounded bg-no/10 px-2 py-1.5 text-text">
+                    <strong>Payoff:</strong> each NO token pays{" "}
+                    <span className="font-mono">$1.00</span> if{" "}
+                    <span className="font-semibold">{ticker}</span> closes{" "}
+                    <span className="font-semibold">below</span>{" "}
+                    <span className="font-mono">{formatUsdc(m.strikeUsd)}</span> at 16:00 ET today.
+                    Otherwise it pays <span className="font-mono">$0.00</span>.
+                  </p>
+                )}
                 <p>
                   <strong>There is no separate NO order book.</strong> Buy No is the atomic{" "}
                   <code className="text-indigo-300">buy_no</code> instruction. In one signed transaction it
