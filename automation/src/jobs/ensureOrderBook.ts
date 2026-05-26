@@ -106,20 +106,46 @@ export interface EnsureOrderBookResult {
  *   - `CONFIG_MISSING`: the program's `config` PDA hasn't been
  *     initialized. Run `scripts/init-config.mjs` once per program
  *     deploy.
+ *   - `ADMIN_INSUFFICIENT_SOL`: the admin keypair is the payer for the
+ *     OrderBook account (7,296 bytes ~= 0.052 SOL) plus the two escrow
+ *     ATAs (~0.002 SOL each) plus tx fees. If the admin balance is
+ *     below the rent threshold, the on-chain init reverts deep inside
+ *     the System Program's transfer with "Transfer: insufficient
+ *     lamports", which is unactionable without log parsing. We
+ *     pre-check the balance and surface a one-liner remediation
+ *     instead.
  *   - `INIT_BOOK_TX_FAILED`: the on-chain `init_order_book` instruction
- *     reverted. Wrap the underlying error in the message; common causes
- *     are the admin keypair lacking SOL, RPC instability, or a stale
- *     IDL after a program upgrade.
+ *     reverted for any other reason. Wrap the underlying error in the
+ *     message; common causes are RPC instability or a stale IDL after a
+ *     program upgrade.
  */
 export class EnsureOrderBookError extends Error {
   constructor(
-    public readonly code: "MARKET_NOT_FOUND" | "CONFIG_MISSING" | "INIT_BOOK_TX_FAILED",
+    public readonly code:
+      | "MARKET_NOT_FOUND"
+      | "CONFIG_MISSING"
+      | "ADMIN_INSUFFICIENT_SOL"
+      | "INIT_BOOK_TX_FAILED",
     message: string,
   ) {
     super(message);
     this.name = "EnsureOrderBookError";
   }
 }
+
+/**
+ * Minimum admin SOL balance required to safely run `init_order_book`.
+ * Breakdown at the 2026-05-26 rent schedule:
+ *   - OrderBook account, 7,296 bytes: ~0.05167 SOL rent-exempt
+ *   - usdc_escrow ATA, 165 bytes:    ~0.00204 SOL rent-exempt
+ *   - yes_escrow ATA, 165 bytes:     ~0.00204 SOL rent-exempt
+ *   - transaction fees (priority + base): ~0.00005 SOL
+ *   - safety margin so we don't fail at exactly the threshold:        ~0.01 SOL
+ *   --------------------------------------------------------------
+ *   total: ~0.066 SOL. We require 0.08 SOL to leave headroom for
+ *   subsequent init runs on the same admin without re-airdropping.
+ */
+const ADMIN_INIT_BOOK_MIN_LAMPORTS = 80_000_000n;
 
 /**
  * Idempotently initialize the order book for a given Market PDA.
@@ -189,6 +215,25 @@ export async function ensureOrderBook(
   );
   const usdcEscrow = getAssociatedTokenAddressSync(usdcMint, bookAuth, true);
   const yesEscrow = getAssociatedTokenAddressSync(yesMint, bookAuth, true);
+
+  // ===== Step 3b: Verify the admin has enough SOL to pay rent + fees. =====
+  // Pre-empts the deep-inside-System-Program "Transfer: insufficient
+  // lamports" log line which an operator cannot act on without log
+  // parsing. Surface the exact remediation (top up the admin keypair at
+  // faucet.solana.com) instead.
+  const adminBalance = await ctx.connection.getBalance(ctx.adminKeypair.publicKey);
+  if (BigInt(adminBalance) < ADMIN_INIT_BOOK_MIN_LAMPORTS) {
+    throw new EnsureOrderBookError(
+      "ADMIN_INSUFFICIENT_SOL",
+      `Admin keypair ${ctx.adminKeypair.publicKey.toBase58()} has only ` +
+        `${(adminBalance / 1e9).toFixed(6)} SOL on the configured cluster, but ` +
+        `init_order_book needs at least ${(Number(ADMIN_INIT_BOOK_MIN_LAMPORTS) / 1e9).toFixed(3)} ` +
+        `SOL to pay rent for the order-book account (~0.052 SOL), two escrow ATAs (~0.004 SOL), ` +
+        `and transaction fees. Top up the admin keypair at https://faucet.solana.com (paste the ` +
+        `pubkey above) or send SOL from any funded devnet wallet, then retry. ` +
+        `Until this is fixed, no new market can be made tradable.`,
+    );
+  }
 
   // ===== Step 4: Short-circuit if the book already exists. =====
   const bookInfo = await ctx.connection.getAccountInfo(orderBook);

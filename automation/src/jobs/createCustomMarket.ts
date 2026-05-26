@@ -113,6 +113,7 @@ export class CreateCustomMarketError extends Error {
       | "INVALID_STRIKE"
       | "INVALID_EXPIRY"
       | "CONFIG_MISSING"
+      | "ADMIN_INSUFFICIENT_SOL"
       | "CREATE_TX_FAILED"
       | "INIT_BOOK_TX_FAILED",
     message: string,
@@ -329,10 +330,12 @@ export async function runCreateCustomMarket(
     orderBookAlreadyInitialized = ensured.alreadyInitialized;
   } catch (err) {
     if (err instanceof EnsureOrderBookError) {
-      // INIT_BOOK_TX_FAILED is the only ensureOrderBook code that can
-      // reach this branch on a successful Step 2 (Market PDA confirmed
-      // to exist immediately above, config checked at Step 1 before
-      // create_strike_market). Wrap into the existing typed error.
+      // ADMIN_INSUFFICIENT_SOL propagates with its own typed code so the
+      // HTTP handler can render the precise "top up the admin keypair"
+      // remediation; everything else collapses into INIT_BOOK_TX_FAILED.
+      if (err.code === "ADMIN_INSUFFICIENT_SOL") {
+        throw new CreateCustomMarketError("ADMIN_INSUFFICIENT_SOL", err.message);
+      }
       throw new CreateCustomMarketError("INIT_BOOK_TX_FAILED", err.message);
     }
     throw err;

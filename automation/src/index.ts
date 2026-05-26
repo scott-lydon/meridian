@@ -587,6 +587,9 @@ async function handleCreateMarket(
       if (err.code === "CONFIG_MISSING") {
         return send(503, { error: "config_missing", message: err.message });
       }
+      if (err.code === "ADMIN_INSUFFICIENT_SOL") {
+        return send(503, { error: "admin_insufficient_sol", message: err.message });
+      }
       if (err.code === "CREATE_TX_FAILED" || err.code === "INIT_BOOK_TX_FAILED") {
         return send(502, { error: err.code.toLowerCase(), message: err.message });
       }
@@ -824,6 +827,12 @@ async function handleInitOrderBook(
       }
       if (err.code === "CONFIG_MISSING") {
         return send(503, { error: "config_missing", message: err.message });
+      }
+      if (err.code === "ADMIN_INSUFFICIENT_SOL") {
+        // 503 + distinct slug so the trade page can render a specific
+        // "top up the admin keypair" CTA. 502 would mislead operators
+        // into thinking it was an RPC failure.
+        return send(503, { error: "admin_insufficient_sol", message: err.message });
       }
       if (err.code === "INIT_BOOK_TX_FAILED") {
         return send(502, { error: "init_book_tx_failed", message: err.message });
