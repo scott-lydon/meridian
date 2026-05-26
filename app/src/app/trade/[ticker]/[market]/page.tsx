@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PublicKey } from "@solana/web3.js";
+import {
+  PublicKey,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
@@ -152,7 +156,7 @@ export default function TradePage({
   const { ticker, market } = params;
   const { data: markets } = useMarkets();
   const { data: book, isLoading: bookLoading } = useOrderBookFor(market);
-  const { publicKey } = useWallet();
+  const { publicKey, sendTransaction } = useWallet();
   const trade = useTrade(market);
   const queryClient = useQueryClient();
 
@@ -190,6 +194,11 @@ export default function TradePage({
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairResult, setRepairResult] = useState<InitOrderBookResult | null>(null);
   const [repairErr, setRepairErr] = useState<string | null>(null);
+  // Step label so the user sees granular progress through the chained
+  // repair flow ("Reading admin pubkey → Funding admin → Initializing
+  // book"). Empty string means idle. Without this the button looks
+  // frozen for ~15-25s while the chained tx + RPC calls happen.
+  const [repairStep, setRepairStep] = useState<string>("");
   // Admin-only force-settle UI state. Kept distinct from the trade
   // `busy` / `lastSig` / `lastErr` triplet because settle is a separate
   // surface (admin server endpoint, not the user's wallet) and mixing
@@ -862,14 +871,79 @@ export default function TradePage({
                 <div className="mt-3 border-t border-yellow-500/20 pt-3">
                   <button
                     type="button"
-                    disabled={repairBusy}
+                    disabled={repairBusy || !publicKey}
                     onClick={async () => {
+                      // Narrow publicKey for the closure so the funding
+                      // branch below does not have to re-check null. The
+                      // button is `disabled` when publicKey is falsy.
+                      const userPk = publicKey;
+                      if (!userPk) {
+                        setRepairErr("Connect a wallet before clicking this button.");
+                        return;
+                      }
                       setRepairBusy(true);
                       setRepairErr(null);
                       setRepairResult(null);
+                      setRepairStep("Reading admin pubkey from on-chain Config PDA…");
                       try {
+                        // ===== Step 1: derive admin pubkey from Config PDA. =====
+                        // Config layout: 8-byte Anchor discriminator + Pubkey
+                        // (admin) + Pubkey (usdc_mint) + ... ; the admin
+                        // field is the first 32 bytes after the discriminator.
+                        // Reading from the chain (instead of hardcoding) means
+                        // a future admin rotation just works.
+                        const [cfgPda] = PublicKey.findProgramAddressSync(
+                          [Buffer.from("config"), Buffer.from([1])],
+                          program.programId,
+                        );
+                        const cfgInfo = await program.provider.connection.getAccountInfo(cfgPda);
+                        if (!cfgInfo) {
+                          throw new Error(
+                            `Program config PDA ${cfgPda.toBase58()} does not exist on ${cluster.name}. ` +
+                              `Run scripts/init-config.mjs once per program deploy.`,
+                          );
+                        }
+                        const adminPubkey = new PublicKey(cfgInfo.data.subarray(8, 8 + 32));
+
+                        // ===== Step 2: check admin balance. =====
+                        // 0.08 SOL covers OrderBook account rent (~0.052) +
+                        // two escrow ATAs (~0.004) + tx fees + safety margin.
+                        // Same threshold as the automation server's precheck
+                        // in automation/src/jobs/ensureOrderBook.ts.
+                        const ADMIN_INIT_BOOK_MIN_LAMPORTS = 80_000_000;
+                        // 0.1 SOL transfer when funding: leaves headroom for
+                        // re-runs on the same admin without re-funding.
+                        const FUND_AMOUNT_LAMPORTS = 100_000_000;
+                        setRepairStep(`Checking admin balance for ${adminPubkey.toBase58().slice(0, 8)}…`);
+                        const adminBal = await program.provider.connection.getBalance(adminPubkey);
+
+                        // ===== Step 3: fund admin from user wallet (only if needed). =====
+                        if (adminBal < ADMIN_INIT_BOOK_MIN_LAMPORTS) {
+                          if (!sendTransaction) {
+                            throw new Error("Wallet adapter does not expose sendTransaction.");
+                          }
+                          setRepairStep(
+                            `Admin has ${(adminBal / 1e9).toFixed(4)} SOL — funding with 0.1 SOL from your wallet…`,
+                          );
+                          const fundIx = SystemProgram.transfer({
+                            fromPubkey: userPk,
+                            toPubkey: adminPubkey,
+                            lamports: FUND_AMOUNT_LAMPORTS,
+                          });
+                          const { blockhash } = await program.provider.connection.getLatestBlockhash("confirmed");
+                          const fundTx = new Transaction().add(fundIx);
+                          fundTx.feePayer = userPk;
+                          fundTx.recentBlockhash = blockhash;
+                          const fundSig = await sendTransaction(fundTx, program.provider.connection);
+                          setRepairStep(`Funding tx ${fundSig.slice(0, 8)}… confirming…`);
+                          await program.provider.connection.confirmTransaction(fundSig, "confirmed");
+                        }
+
+                        // ===== Step 4: now call the automation server. =====
+                        setRepairStep("Calling /admin/init-order-book…");
                         const result = await postInitOrderBook({ marketPubkey: market });
                         setRepairResult(result);
+                        setRepairStep("");
                         // Trigger an immediate refetch so the book panel
                         // flips from "not initialized" to the empty-book
                         // grid (bids: 0, asks: 0) the moment the tx
@@ -888,14 +962,17 @@ export default function TradePage({
                             err instanceof Error ? err.message : String(err),
                           );
                         }
+                        setRepairStep("");
                       } finally {
                         setRepairBusy(false);
                       }
                     }}
                     className="w-full rounded-lg border border-accent/50 bg-accent/20 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
-                    title="POSTs marketPubkey to the automation server's /admin/init-order-book endpoint, which calls init_order_book on-chain using the admin keypair. Idempotent."
+                    title="One-click repair. Reads the admin pubkey from on-chain Config, tops up the admin with 0.1 SOL from YOUR connected wallet if its balance is below 0.08 SOL, then calls /admin/init-order-book to allocate the order book PDA. The funding step is the bypass for the devnet faucet rate-limit; the on-chain init is idempotent."
                   >
-                    {repairBusy ? "Initializing book — signing init_order_book…" : "Initialize order book (admin)"}
+                    {repairBusy
+                      ? repairStep || "Working…"
+                      : "Fund admin + initialize order book (one click)"}
                   </button>
                   {repairResult && (
                     <div className="mt-2 rounded-md border border-yes/40 bg-yes/10 p-2 text-[11px]">
