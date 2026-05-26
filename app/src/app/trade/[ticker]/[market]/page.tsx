@@ -304,6 +304,24 @@ export default function TradePage({
         })()
       : null;
 
+  // OrderBook PDA, derived once per render. Each bid / ask row links to
+  // this account on Solana Explorer so a user can click straight through
+  // from the visual book to the raw on-chain account that physically
+  // stores the zero-copy order data — the transparency-of-inner-workings
+  // rule in CLAUDE.md. Pure function of programId + market, no RPC; safe
+  // to re-derive every render. `null` when the market pubkey is invalid;
+  // the "market not found" branch upstream already handles that, but we
+  // guard anyway so this hook never throws during render.
+  const orderBookPda: string | null = market
+    ? (() => {
+        try {
+          return deriveMarketAddresses(program.programId, new PublicKey(market)).orderBook.toBase58();
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
   // `delta` is an optional human-readable description of the expected
   // balance change ("+3 YES, +3 NO, −$3 USDC"). The confirmation toast
   // renders it so the user does not have to mentally diff pills. On
@@ -1023,20 +1041,77 @@ export default function TradePage({
           {book && (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <h3 className="mb-2 text-xs uppercase text-yes">Bids</h3>
+                <h3 className="mb-2 text-xs uppercase text-yes flex items-baseline gap-2">
+                  <span>Bids</span>
+                  {orderBookPda && (
+                    // "See for yourself" link to the entire CLOB account
+                    // on Solana Explorer. The OrderBook PDA is a single
+                    // ~7,296-byte zero-copy account that physically
+                    // stores every bid + ask in the inline `bids[]` /
+                    // `asks[]` arrays — clicking through proves the
+                    // on-screen book is exactly the on-chain state, not
+                    // a backend cache. The maker-specific links below
+                    // are complementary: this one is for "show me the
+                    // CLOB", those are for "show me the maker".
+                    <a
+                      href={explorerAddressUrl(orderBookPda)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-normal normal-case text-accent underline decoration-accent/40 hover:text-accentHover"
+                      title="Open the on-chain OrderBook PDA on Solana Explorer. This single account holds every bid + ask in zero-copy storage; the page renders directly from it."
+                    >
+                      view full CLOB on-chain ↗
+                    </a>
+                  )}
+                </h3>
                 {book.bids.length === 0 ? (
                   <p className="text-sm text-muted">No bids.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.bids.slice(0, 10).map((b) => {
                       const mine = !!publicKey && b.owner === publicKey.toBase58();
+                      const rowHref = orderBookPda ? explorerAddressUrl(orderBookPda) : null;
                       return (
                         <li key={`${b.owner}-${b.sequence}`} className="flex items-center justify-between gap-2">
-                          <span className={mine ? "text-yes font-semibold" : "text-yes"}>
-                            {formatUsdc(b.priceUsd)}
-                            {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
-                          </span>
-                          <span className="text-muted">{b.qty.toString()}</span>
+                          {rowHref ? (
+                            <a
+                              href={rowHref}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={
+                                "flex flex-1 items-center justify-between gap-2 rounded px-1 -mx-1 hover:bg-yes/10 " +
+                                (mine ? "text-yes font-semibold" : "text-yes")
+                              }
+                              title={`Open the OrderBook PDA on Solana Explorer. This bid lives inside that account as a zero-copy Order { price_ticks: ${b.priceTicks}, qty: ${b.qty.toString()}, sequence: ${b.sequence.toString()}, owner: ${b.owner} }.`}
+                            >
+                              <span>
+                                {formatUsdc(b.priceUsd)}
+                                {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
+                              </span>
+                              <span className="text-muted">{b.qty.toString()}</span>
+                              <span aria-hidden className="text-[10px] opacity-50">↗</span>
+                            </a>
+                          ) : (
+                            <span className={mine ? "text-yes font-semibold" : "text-yes"}>
+                              {formatUsdc(b.priceUsd)} <span className="text-muted">{b.qty.toString()}</span>
+                            </span>
+                          )}
+                          {!mine && (
+                            // Maker-pubkey peek for non-self rows. Lets
+                            // the user audit who placed the bid without
+                            // leaving the page. For self rows we skip
+                            // (you already know it's you) and surface
+                            // the Cancel button instead.
+                            <a
+                              href={explorerAddressUrl(b.owner)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded bg-yes/10 px-2 py-0.5 font-mono text-[10px] text-yes/80 hover:bg-yes/20 hover:text-yes"
+                              title={`Open the maker wallet ${b.owner} on Solana Explorer.`}
+                            >
+                              maker {b.owner.slice(0, 4)}…{b.owner.slice(-4)} ↗
+                            </a>
+                          )}
                           {mine && (
                             <button
                               disabled={busy !== null}
@@ -1054,20 +1129,63 @@ export default function TradePage({
                 )}
               </div>
               <div>
-                <h3 className="mb-2 text-xs uppercase text-no">Asks</h3>
+                <h3 className="mb-2 text-xs uppercase text-no flex items-baseline gap-2">
+                  <span>Asks</span>
+                  {orderBookPda && (
+                    <a
+                      href={explorerAddressUrl(orderBookPda)}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] font-normal normal-case text-accent underline decoration-accent/40 hover:text-accentHover"
+                      title="Open the on-chain OrderBook PDA on Solana Explorer. Same account as the bid-side link; bids[] and asks[] are inline arrays on a single zero-copy account."
+                    >
+                      view full CLOB on-chain ↗
+                    </a>
+                  )}
+                </h3>
                 {book.asks.length === 0 ? (
                   <p className="text-sm text-muted">No asks.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.asks.slice(0, 10).map((a) => {
                       const mine = !!publicKey && a.owner === publicKey.toBase58();
+                      const rowHref = orderBookPda ? explorerAddressUrl(orderBookPda) : null;
                       return (
                         <li key={`${a.owner}-${a.sequence}`} className="flex items-center justify-between gap-2">
-                          <span className={mine ? "text-no font-semibold" : "text-no"}>
-                            {formatUsdc(a.priceUsd)}
-                            {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
-                          </span>
-                          <span className="text-muted">{a.qty.toString()}</span>
+                          {rowHref ? (
+                            <a
+                              href={rowHref}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={
+                                "flex flex-1 items-center justify-between gap-2 rounded px-1 -mx-1 hover:bg-no/10 " +
+                                (mine ? "text-no font-semibold" : "text-no")
+                              }
+                              title={`Open the OrderBook PDA on Solana Explorer. This ask lives inside that account as a zero-copy Order { price_ticks: ${a.priceTicks}, qty: ${a.qty.toString()}, sequence: ${a.sequence.toString()}, owner: ${a.owner} }.`}
+                            >
+                              <span>
+                                {formatUsdc(a.priceUsd)}
+                                {mine && <span className="ml-1 text-[10px] text-accent">(you)</span>}
+                              </span>
+                              <span className="text-muted">{a.qty.toString()}</span>
+                              <span aria-hidden className="text-[10px] opacity-50">↗</span>
+                            </a>
+                          ) : (
+                            <span className={mine ? "text-no font-semibold" : "text-no"}>
+                              {formatUsdc(a.priceUsd)} <span className="text-muted">{a.qty.toString()}</span>
+                            </span>
+                          )}
+                          {!mine && (
+                            <a
+                              href={explorerAddressUrl(a.owner)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded bg-no/10 px-2 py-0.5 font-mono text-[10px] text-no/80 hover:bg-no/20 hover:text-no"
+                              title={`Open the maker wallet ${a.owner} on Solana Explorer.`}
+                            >
+                              maker {a.owner.slice(0, 4)}…{a.owner.slice(-4)} ↗
+                            </a>
+                          )}
                           {mine && (
                             <button
                               disabled={busy !== null}
