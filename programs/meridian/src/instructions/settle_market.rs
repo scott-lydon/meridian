@@ -12,7 +12,8 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 use crate::constants::{CONFIG_SEED, PROGRAM_VERSION, USDC_BASE_PER_DOLLAR};
 use crate::error::MeridianError;
-use crate::state::{Config, Market, Outcome, OutcomeState};
+use crate::math::{decide_outcome, pyth_confidence_bps, pyth_price_to_micros};
+use crate::state::{Config, Market, Outcome};
 
 #[derive(Accounts)]
 pub struct SettleMarket<'info> {
@@ -88,8 +89,9 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
         return err!(MeridianError::OracleUpdateMissing);
     }
 
-    let conf_bps: u128 = (u128::from(raw_conf) * 10_000)
-        / u128::try_from(raw_price).map_err(|_| MeridianError::OracleUpdateMissing)?;
+    // Confidence band check. See `math::pyth_confidence_bps` for the
+    // basis-points formula and the unit tests that pin its boundary cases.
+    let conf_bps = pyth_confidence_bps(raw_conf, raw_price)?;
     if conf_bps > u128::from(ctx.accounts.config.max_confidence_bps) {
         msg!(
             "OracleConfidenceTooWide: conf_bps={} > max_confidence_bps={} (raw_conf={}, raw_price={})",
@@ -101,28 +103,12 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
         return err!(MeridianError::OracleConfidenceTooWide);
     }
 
-    // Scale price to USDC base units (6 decimals).
-    // closing_price_micros = raw_price * 10^(exponent + 6)
-    let scale = i64::from(exponent) + 6;
-    let price_u128 = u128::try_from(raw_price).map_err(|_| MeridianError::OracleUpdateMissing)?;
-    let closing_price_micros: u64 = if scale >= 0 {
-        let mul = 10u128
-            .checked_pow(u32::try_from(scale).map_err(|_| MeridianError::MathOverflow)?)
-            .ok_or(MeridianError::MathOverflow)?;
-        u64::try_from(price_u128.checked_mul(mul).ok_or(MeridianError::MathOverflow)?)
-            .map_err(|_| MeridianError::MathOverflow)?
-    } else {
-        let div = 10u128
-            .checked_pow(u32::try_from(-scale).map_err(|_| MeridianError::MathOverflow)?)
-            .ok_or(MeridianError::MathOverflow)?;
-        u64::try_from(price_u128 / div).map_err(|_| MeridianError::MathOverflow)?
-    };
+    // Scale Pyth's `value * 10^exponent` representation into the program's
+    // 6-decimal micros. The helper is the single source of truth for this
+    // conversion and is unit-tested across boundary scales in `math.rs`.
+    let closing_price_micros = pyth_price_to_micros(raw_price, exponent)?;
 
-    let state = if closing_price_micros >= market.strike_usd_micros {
-        OutcomeState::YesWins
-    } else {
-        OutcomeState::NoWins
-    };
+    let state = decide_outcome(closing_price_micros, market.strike_usd_micros);
 
     market.outcome = Outcome {
         state,

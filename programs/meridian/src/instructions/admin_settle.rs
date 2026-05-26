@@ -5,7 +5,8 @@ use anchor_lang::prelude::*;
 
 use crate::constants::{CONFIG_SEED, PROGRAM_VERSION};
 use crate::error::MeridianError;
-use crate::state::{Config, Market, Outcome, OutcomeState};
+use crate::math::decide_outcome;
+use crate::state::{Config, Market, Outcome};
 
 #[derive(Accounts)]
 pub struct AdminSettle<'info> {
@@ -38,11 +39,8 @@ pub fn handler(ctx: Context<AdminSettle>, closing_price_micros: u64) -> Result<(
         return err!(MeridianError::AdminOverrideTooEarly);
     }
 
-    let state = if closing_price_micros >= market.strike_usd_micros {
-        OutcomeState::YesWins
-    } else {
-        OutcomeState::NoWins
-    };
+    // See `math::decide_outcome` for the boundary spec.
+    let state = decide_outcome(closing_price_micros, market.strike_usd_micros);
 
     market.outcome = Outcome {
         state,

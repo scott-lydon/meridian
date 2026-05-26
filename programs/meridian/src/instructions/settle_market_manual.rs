@@ -10,7 +10,8 @@ use anchor_lang::prelude::*;
 
 use crate::constants::PROGRAM_VERSION;
 use crate::error::MeridianError;
-use crate::state::{Config, Market, Outcome, OutcomeState};
+use crate::math::decide_outcome;
+use crate::state::{Config, Market, Outcome};
 
 #[derive(Accounts)]
 pub struct SettleMarketManual<'info> {
@@ -32,11 +33,8 @@ pub fn handler(ctx: Context<SettleMarketManual>, closing_price_micros: u64) -> R
     require!(!market.outcome.is_settled(), MeridianError::MarketAlreadySettled);
     require!(closing_price_micros > 0, MeridianError::InvalidStrike);
 
-    let state = if closing_price_micros >= market.strike_usd_micros {
-        OutcomeState::YesWins
-    } else {
-        OutcomeState::NoWins
-    };
+    // See `math::decide_outcome` for the boundary spec (close == strike => YesWins).
+    let state = decide_outcome(closing_price_micros, market.strike_usd_micros);
 
     market.outcome = Outcome {
         state,
