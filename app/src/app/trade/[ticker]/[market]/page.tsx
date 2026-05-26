@@ -11,6 +11,7 @@ import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
 import { useTrade } from "@/hooks/useTrade";
 import { useMarketBalances } from "@/hooks/useMarketBalances";
+import { useSolBalance } from "@/hooks/useSolBalance";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 import { marketUiState } from "@/lib/marketSession";
@@ -173,6 +174,34 @@ export default function TradePage({
   const isExpired = expiryHasPassed && !afterHoursMode;
   const uiState = m ? marketUiState(m) : null;
   const isSettled = uiState === "won-yes" || uiState === "won-no";
+
+  // Cluster-mismatch detection. The wallet extension and the SITE'S RPC
+  // each have their own view of "is this wallet funded". Phantom defaults
+  // to Mainnet; Meridian's RPC is Devnet. If the user hydrated Devnet via
+  // faucet but Phantom is still on Mainnet, the wallet popup will reject
+  // every transaction with "You don't have enough SOL" — even though the
+  // address has plenty on Devnet — because Phantom checks its own cluster
+  // view (0 SOL on Mainnet) when validating. The Wallet Standard does not
+  // expose the wallet's selected cluster (Phantom blocks that as a
+  // fingerprinting vector), so we infer mismatch from a single signal:
+  // the SITE's RPC reports 0 lamports for a connected wallet.
+  //
+  // Two reasons this signal fires: (a) the user genuinely has 0 SOL on
+  // the site's cluster (never airdropped) — covered by the same banner
+  // copy below pointing at faucet.solana.com; (b) the wallet is on a
+  // different cluster — also covered, pointing at the extension's
+  // network switcher. The banner is informational and never blocks
+  // the trade buttons; we let the wallet popup remain the authoritative
+  // refusal surface so the on-chain check (which we cannot replicate
+  // client-side without trusting Phantom's view) stays sovereign.
+  const solBalance = useSolBalance(publicKey?.toBase58());
+  // showClusterMismatchBanner is true when we are CONFIDENT the user
+  // sees 0 SOL on the site's cluster. We do not show it while the query
+  // is loading or errored — that would spam the banner on every page
+  // load before the RPC responds. `data` only resolves to a SolBalance
+  // when getBalance succeeded.
+  const showClusterMismatchBanner =
+    !!publicKey && solBalance.isSuccess && solBalance.data.lamports === 0n;
 
   function explorerTx(sig: string) {
     return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
