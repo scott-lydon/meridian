@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { ConnectWalletButton } from "@/components/ConnectWalletButton";
+import { DisabledHint } from "@/components/DisabledHint";
 import { InfoTip } from "@/components/InfoTip";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
@@ -190,12 +191,11 @@ export default function TradePage({
   const [lastErrHero, setLastErrHero] = useState<TradeTxHero | null>(null);
   // Toggle for the collapsible technical-details block beneath the toast.
   const [errDetailsExpanded, setErrDetailsExpanded] = useState(false);
-  // Collapsible state for the "Why some buttons are disabled" panel.
-  // Default collapsed per user preference; clicking the heading row
-  // expands it. State is component-local because the user's reasoning
-  // is "I want to glance at the constraint reason on demand without
-  // having a tall yellow box on screen for the whole session."
-  const [disabledReasonsExpanded, setDisabledReasonsExpanded] = useState(false);
+  // (Removed 2026-05-26.) Was: const [disabledReasonsExpanded, ...] = useState(false).
+  // Drove the open/closed state of the consolidated "Why some buttons
+  // are disabled" panel. The panel itself was replaced by per-button
+  // DisabledHint lines rendered directly underneath each disabled
+  // button, so no consumer remains.
   // Repair-book state. Distinct from the trade `busy` / `lastSig` /
   // `lastErr` triplet because the repair flow targets a different
   // surface (the automation server's /admin/init-order-book endpoint)
@@ -450,6 +450,67 @@ export default function TradePage({
   // buttons so the user does not produce another "Simulation failed"
   // toast; the repair affordance above is the path to fix it.
   const bookUninitialized = !bookLoading && book === null;
+
+  // Per-button disabled-reason strings, in priority order matching the
+  // disabled={...} prop's short-circuit. SINGLE SOURCE OF TRUTH that
+  // drives both the title= hover hint AND the visible DisabledHint
+  // underneath each button. Returns null when the button is enabled
+  // (or when no recognised reason applies); DisabledHint renders nothing
+  // for null/empty reasons. Priority order matters because the FIRST
+  // reason hit is the one the user sees; e.g. an expired market should
+  // surface "Market expired" before "you already hold NO" because the
+  // former is the binding constraint and the latter is irrelevant once
+  // trading is closed.
+  const isWalletDisconnected = !publicKey;
+  const buyYesDisabledReason: string | null = isWalletDisconnected
+    ? "Connect a wallet to trade."
+    : isExpired
+      ? "Market expired (16:00 ET); Buy Yes is hidden until next session."
+      : bookUninitialized
+        ? "Order book PDA is not initialized on chain. Mint Pair and Redeem Pair still work."
+        : holdsNo
+          ? "You already hold NO tokens. Sell or redeem your NO position before buying YES (one-side-at-a-time product constraint)."
+          : null;
+  const buyNoDisabledReason: string | null = isWalletDisconnected
+    ? "Connect a wallet to trade."
+    : isExpired
+      ? "Market expired (16:00 ET); Buy No is hidden until next session."
+      : bookUninitialized
+        ? "Order book PDA is not initialized on chain."
+        : holdsYes
+          ? "You already hold YES tokens. Sell or redeem your YES position before buying NO."
+          : bestBidIsSelf
+            ? "Best YES bid is your own order. Buy No would self-cross; cancel your own bid first (red ✕ on the (you) row)."
+            : !bestBid
+              ? "No YES bid on the book yet. Buy No needs a resting bid to sell the freshly-minted YES into; it cannot fill against an ask."
+              : null;
+  const sellYesDisabledReason: string | null = isWalletDisconnected
+    ? "Connect a wallet to trade."
+    : isExpired
+      ? "Market expired; Sell Yes is hidden until next session."
+      : bookUninitialized
+        ? "Order book PDA is not initialized on chain."
+        : !holdsYes
+          ? "You don't hold any YES tokens to sell. Use Mint Pair (gets you 1 YES + 1 NO for $1.00) or Buy Yes first."
+          : null;
+  const sellNoDisabledReason: string | null = isWalletDisconnected
+    ? "Connect a wallet to trade."
+    : isExpired
+      ? "Market expired; Sell No is hidden until next session."
+      : bookUninitialized
+        ? "Order book PDA is not initialized on chain."
+        : !holdsNo
+          ? "You don't hold any NO tokens to sell. Use Mint Pair or Buy No first."
+          : bestAskIsSelf
+            ? "Best YES ask is your own order. Sell No would self-cross; cancel your own ask first."
+            : !bestAsk
+              ? "No YES ask on the book yet. Sell No needs a resting ask to buy YES from before redeeming the pair."
+              : null;
+  const mintPairDisabledReason: string | null = isWalletDisconnected
+    ? "Connect a wallet to trade."
+    : isExpired
+      ? "Market expired; Mint Pair is hidden until next session."
+      : null;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -830,103 +891,46 @@ export default function TradePage({
               flips to communicate state. State is component-local
               (`disabledReasonsExpanded`) — survives re-renders, resets
               on navigation. */}
-          {(holdsYes || holdsNo || !bestBid || !bestAsk || isExpired) && (
-            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-xs text-yellow-200">
-              <button
-                type="button"
-                onClick={() => setDisabledReasonsExpanded((v) => !v)}
-                className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-yellow-500/5"
-                aria-expanded={disabledReasonsExpanded}
-                aria-controls="why-disabled-content"
-                title={
-                  disabledReasonsExpanded
-                    ? "Hide the disabled-button reasons"
-                    : "Show why some trade buttons are currently disabled"
-                }
-              >
-                <span className="font-semibold text-yellow-100">
-                  Why some buttons are disabled:
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`transition-transform ${disabledReasonsExpanded ? "rotate-90" : ""}`}
-                >
-                  ▶
-                </span>
-              </button>
-              {disabledReasonsExpanded && (
-                <div id="why-disabled-content" className="px-3 pb-3">
-              <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                {/*
-                  Expired-market gate is listed FIRST because it disables
-                  every trade button at once (including Mint Pair and
-                  Redeem Pair), making it the most load-bearing reason
-                  when it fires. Reported 2026-05-25 by a tester who
-                  signed in as admin and could not figure out why mint
-                  was dim — the constraint box only listed Buy No / Sell
-                  No book-liquidity reasons even though every button was
-                  disabled by `isExpired`. The branch on `adminMode`
-                  surfaces the after-hours-toggle override path only to
-                  visitors who actually have access to it; non-admins
-                  get the wait-for-tomorrow guidance instead, because
-                  the toggle is gated on admin sign-in via
-                  `useAfterHoursMode`'s admin AND-gate.
-                */}
-                {isExpired && (
-                  <li>
-                    <span className="font-semibold">All trade buttons</span> (Buy Yes, Buy No, Sell Yes, Sell No,
-                    Mint Pair, Redeem Pair) are disabled because this market is past its 16:00 ET expiry and is
-                    awaiting settlement.{" "}
-                    {adminMode ? (
-                      <>
-                        To bypass for testing, click the <span className="font-mono">🧪 DEV</span> pill in the header
-                        and flip <em>Bypass UI expiry gates</em> to ON. The on-chain program accepts these
-                        instructions 24/7; only the UI hides them past expiry.
-                      </>
-                    ) : (
-                      <>
-                        Visit a market that has not yet expired, or wait for the morning cron at 08:00 ET to create
-                        today&apos;s strikes.
-                      </>
-                    )}
-                  </li>
+          {/* The consolidated "Why some buttons are disabled:" panel that
+              previously lived here was removed on 2026-05-26 in favour of
+              per-button DisabledHint lines that render directly UNDERNEATH
+              each disabled trade button. Single visible exception: the
+              market-wide "All trade buttons disabled because the market is
+              expired" notice below — it gates EVERY trade button at once,
+              so listing it under each one would six-paste the same text;
+              keeping a single banner is the readable choice. The
+              disabledReasonsExpanded state and its handler are no longer
+              referenced and have been dropped.
+          */}
+          {/*
+            Expired-market notice. The only constraint still rendered as a
+            standalone banner instead of a per-button DisabledHint, because
+            expiry disables EVERY trade button at once and pasting the same
+            sentence under all six would be noise. The adminMode branch
+            tells trusted visitors how to bypass via the 🧪 DEV pill (the
+            on-chain program accepts these instructions 24/7; only the UI
+            hides them past expiry). Non-admins get the wait-for-tomorrow
+            guidance instead, because the after-hours toggle is gated on
+            admin sign-in via useAfterHoursMode's AND-gate.
+          */}
+          {isExpired && (
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-200">
+              <p>
+                <span className="font-semibold">All trade buttons disabled</span> — this market is past its
+                16:00 ET expiry and is awaiting settlement.{" "}
+                {adminMode ? (
+                  <>
+                    To bypass for testing, click the <span className="font-mono">🧪 DEV</span> pill in the header
+                    and flip <em>Bypass UI expiry gates</em> to ON. The on-chain program accepts these
+                    instructions 24/7; only the UI hides them past expiry.
+                  </>
+                ) : (
+                  <>
+                    Visit a market that has not yet expired, or wait for the morning cron at 08:00 ET to create
+                    today&apos;s strikes.
+                  </>
                 )}
-                {holdsNo && (
-                  <li>
-                    <span className="font-semibold">Buy Yes</span> is disabled because you already hold NO tokens.
-                    Sell your NO position first (or wait for settlement + redeem).
-                  </li>
-                )}
-                {holdsYes && (
-                  <li>
-                    <span className="font-semibold">Buy No</span> is disabled because you already hold YES tokens.
-                    Sell your YES position first (or wait for settlement + redeem).
-                  </li>
-                )}
-                {!bestBid && (
-                  <li>
-                    <span className="font-semibold">Buy No</span> also needs at least one resting BID on the YES side
-                    of the order book (it atomically mints a pair and sells the YES into that bid).
-                    Currently the book has no bids.
-                  </li>
-                )}
-                {!bestAsk && (
-                  <li>
-                    <span className="font-semibold">Sell No</span> needs at least one resting ASK on the YES side
-                    of the order book (it atomically buys YES from that ask, then redeems the pair).
-                    Currently the book has no asks.
-                  </li>
-                )}
-              </ul>
-              {(holdsYes || holdsNo) && (
-                <p className="mt-2 text-yellow-200/70">
-                  Why the position constraint exists: holding both sides at once is economically a no-op
-                  (each YES+NO pair pays exactly $1 at settlement regardless of outcome), so the product blocks
-                  you from accidentally minting more.
-                </p>
-              )}
-                </div>
-              )}
+              </p>
             </div>
           )}
         </section>
@@ -1557,9 +1561,23 @@ export default function TradePage({
               color stripping makes "you cannot click this" unambiguous at
               a glance, without needing to hover for the title attribute.
               `cursor-not-allowed` reinforces the affordance.
-              Reasons live in the constraints box above the form, NOT only
-              in hover tooltips — so a user on a touch device still sees
-              the why.
+
+              DisabledHint heads-up: each button's reason is computed
+              into a per-button const (`buyYesDisabledReason` etc.) and
+              rendered as a yellow ⓘ line UNDERNEATH the button via the
+              `<DisabledHint reason={...}/>` component. Single source of
+              truth: the same reason string drives the `title` hover
+              attribute (desktop hover affordance) AND the visible
+              DisabledHint line (touch + glance-without-hover
+              affordance). When the reason is null/empty the hint
+              renders nothing, so enabled buttons get no extra row of
+              vertical space. Replaces the prior consolidated "Why some
+              buttons are disabled:" panel at the top of the page — the
+              user reported on 2026-05-26 that the panel forced them to
+              mentally match each reason back to the button it referred
+              to, and asked for the reason to live next to the button
+              the user is actually looking at.
+
               Each button is wrapped in a `relative` div so its InfoTip
               icon can absolutely position into the button's top-right
               corner. The InfoTip popover explains the on-chain mechanism
@@ -1568,6 +1586,15 @@ export default function TradePage({
               the hood). Top-row buttons get side="top" (popover above)
               and bottom-row get side="bottom" (popover below) so the
               popover never overlaps the other row of buttons. */}
+          {/* Per-button disabled-reason strings are computed at the top
+              of this component (search for `buyYesDisabledReason`).
+              Reason is null when the button is enabled OR when no
+              recognised reason applies; <DisabledHint> renders nothing
+              in either case so enabled buttons get no extra row of
+              vertical space. Redeem Pair's own gated block already
+              prints settled / pair-balance hints directly under the
+              button via `settledHint`, so it does not get a
+              DisabledHint here. */}
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
               <button
@@ -1605,6 +1632,7 @@ export default function TradePage({
                   the current best ask and letting the cranker cross.
                 </p>
               </InfoTip>
+              <DisabledHint reason={buyYesDisabledReason} />
             </div>
             <div className="relative">
               <button
@@ -1656,6 +1684,7 @@ export default function TradePage({
                   less than your floor if the resting bid is richer.
                 </p>
               </InfoTip>
+              <DisabledHint reason={buyNoDisabledReason} />
             </div>
             <div className="relative">
               <button
@@ -1689,6 +1718,7 @@ export default function TradePage({
                   any time before fill.
                 </p>
               </InfoTip>
+              <DisabledHint reason={sellYesDisabledReason} />
             </div>
             <div className="relative">
               <button
@@ -1741,6 +1771,7 @@ export default function TradePage({
                   else on the network would have minted theirs fresh via <code>buy_no</code>.
                 </p>
               </InfoTip>
+              <DisabledHint reason={sellNoDisabledReason} />
             </div>
           </div>
 
@@ -1751,6 +1782,7 @@ export default function TradePage({
           >
             {busy === "Mint Pair" ? "..." : `Mint ${qty} pair (deposit $${qty}.00 USDC)`}
           </button>
+          <DisabledHint reason={mintPairDisabledReason} />
 
           {/* Redeem Pair — inverse of Mint Pair. Pre-settlement only.
               Disabled unless the user holds at least `qty` of BOTH YES and
