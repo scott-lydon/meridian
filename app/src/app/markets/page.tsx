@@ -3,6 +3,12 @@
 import Link from "next/link";
 
 import { useMarkets } from "@/hooks/useMarkets";
+import {
+  hasAnyPresence,
+  presenceFor,
+  useMarketsUserPresence,
+  type UserPresence,
+} from "@/hooks/useMarketsUserPresence";
 import { formatUsdc } from "@/lib/usdc";
 import {
   isTradeable,
@@ -23,6 +29,13 @@ const MAG7 = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"] as const;
 
 export default function MarketsPage() {
   const { data, isLoading, error } = useMarkets();
+  // Per-market YES/NO/open-order presence for the connected wallet. One
+  // hook serves the whole grid; each card looks up its own market by
+  // pubkey. Returns an empty map when wallet disconnected, so the badge
+  // path below renders nothing without extra guards.
+  // See useMarketsUserPresence.ts for the 2-RPC batching strategy that
+  // makes this affordable on the public devnet rate limit.
+  const presence = useMarketsUserPresence();
   // After-hours toggle (header) bypasses the wall-clock UI gates so the
   // user can test mint/buy/sell against past-expiry markets. The on-chain
   // program already permits these transactions; only the product's
@@ -58,6 +71,17 @@ export default function MarketsPage() {
       {error && (
         <p className="rounded border border-no bg-no/10 p-4 text-no">
           Error reading markets: {(error as Error).message}
+        </p>
+      )}
+
+      {/* If presence fetch errored, surface it inline (small, muted) — the
+          badges silently no-op otherwise and the user has no way to know
+          the indicator is broken vs they just have no position. */}
+      {presence.isError && (
+        <p className="mb-3 rounded border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs text-yellow-200">
+          Could not load your per-market positions: {(presence.error as Error)?.message ?? "unknown error"}.
+          The strike list below is still accurate; only the &quot;you have positions here&quot; badges are
+          hidden until this refreshes.
         </p>
       )}
 
@@ -105,6 +129,13 @@ export default function MarketsPage() {
                       const clickable = afterHoursMode
                         ? isOpenOnChain
                         : isTradeable(state);
+                      // Per-market presence lookup. Returns the
+                      // empty-zeros sentinel when the wallet is
+                      // disconnected or the user has nothing on this
+                      // market, so `hasAnyPresence` is the single gate
+                      // that decides whether to render the badge.
+                      const myPresence = presenceFor(presence.data, m.pubkey);
+                      const showBadge = hasAnyPresence(myPresence);
                       // Non-tradeable rows still link to the trade page so a
                       // user can read the settled outcome, but the visual
                       // affordance dims and the pill colour signals why the
@@ -127,8 +158,11 @@ export default function MarketsPage() {
                             }
                           >
                             <span>&gt; {formatUsdc(m.strikeUsd)}</span>
-                            <span className={marketUiStatePillClasses(state)}>
-                              {marketUiStateLabel(state)}
+                            <span className="flex items-center gap-2">
+                              {showBadge && <UserPresenceBadge presence={myPresence} />}
+                              <span className={marketUiStatePillClasses(state)}>
+                                {marketUiStateLabel(state)}
+                              </span>
                             </span>
                           </Link>
                         </li>
@@ -141,5 +175,81 @@ export default function MarketsPage() {
         })}
       </div>
     </main>
+  );
+}
+
+/**
+ * Small per-strike badge: "you have YES / NO / open orders on this market."
+ *
+ * Rendered inside the strike row, BEFORE the existing state pill (awaiting
+ * settle / yes won / no won / open). Keeps the row visually balanced —
+ * the badge is left-of-pill instead of replacing it. The badge stays
+ * compact: one chip per non-zero dimension (YES tokens, NO tokens, open
+ * bids, open asks), separated by hairline `·` dots. Numbers larger than
+ * 999 are clamped to `999+` so the badge never wraps and breaks the row.
+ *
+ * Why not a single "you" dot: the user needs to know WHAT they have on
+ * this market without clicking through. The most common signal on a
+ * binary-outcome market is "I have N YES" or "I have N NO"; collapsing
+ * those into a single anonymous dot would force a navigate-to-trade-page
+ * to find out which side. That defeats the point of the indicator.
+ *
+ * Accessibility: each chip has a `title` so a screen reader (or a
+ * mouse-hover) reads the full sentence. The aria-label on the wrapper
+ * narrates the same thing at the badge level.
+ */
+function UserPresenceBadge({ presence }: { presence: UserPresence }) {
+  function clamp(n: number | bigint): string {
+    const v = typeof n === "bigint" ? Number(n) : n;
+    return v > 999 ? "999+" : v.toString();
+  }
+  const parts: { key: string; label: string; cls: string; title: string }[] = [];
+  if (presence.yes > 0n) {
+    parts.push({
+      key: "yes",
+      label: `YES ${clamp(presence.yes)}`,
+      cls: "text-yes",
+      title: `You hold ${presence.yes.toString()} YES tokens on this market.`,
+    });
+  }
+  if (presence.no > 0n) {
+    parts.push({
+      key: "no",
+      label: `NO ${clamp(presence.no)}`,
+      cls: "text-no",
+      title: `You hold ${presence.no.toString()} NO tokens on this market.`,
+    });
+  }
+  if (presence.openBids > 0) {
+    parts.push({
+      key: "bids",
+      label: `${clamp(presence.openBids)} bid${presence.openBids === 1 ? "" : "s"}`,
+      cls: "text-accent",
+      title: `You have ${presence.openBids} resting bid${presence.openBids === 1 ? "" : "s"} on this market's YES book. Cancel from the trade page to reclaim your escrowed USDC.`,
+    });
+  }
+  if (presence.openAsks > 0) {
+    parts.push({
+      key: "asks",
+      label: `${clamp(presence.openAsks)} ask${presence.openAsks === 1 ? "" : "s"}`,
+      cls: "text-accent",
+      title: `You have ${presence.openAsks} resting ask${presence.openAsks === 1 ? "" : "s"} on this market's YES book. Cancel from the trade page to reclaim your escrowed YES tokens.`,
+    });
+  }
+  if (parts.length === 0) return null;
+  const ariaLabel = parts.map((p) => p.label).join(", ");
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+      aria-label={`Your presence on this market: ${ariaLabel}`}
+      title="Click through to the trade page to see your full position and any open orders."
+    >
+      {parts.map((p, i) => (
+        <span key={p.key} className={p.cls} title={p.title}>
+          {i > 0 && <span className="mr-1 text-muted">·</span>}
+          {p.label}
+        </span>
+      ))}
+    </span>
   );
 }
