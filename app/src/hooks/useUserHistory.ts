@@ -232,66 +232,142 @@ function usdcDeltaForUser(tx: ParsedTransactionWithMeta, userPubkey: string): bi
   return (post ?? 0n) - (pre ?? 0n);
 }
 
-export function useUserHistory(limit = 50, days = 30) {
+/**
+ * Module-level decoded-signature cache. Each Solana signature is
+ * IMMUTABLE — a transaction's instructions, args, slot, blockTime, and
+ * USDC delta never change after confirmation — so a once-decoded `UserTx`
+ * stays valid for the lifetime of the page. Cache hits skip both the
+ * `getParsedTransactions` RPC AND the bs58-decode + Anchor-discriminator
+ * + arg-decode work, which is the single biggest reduction we can make
+ * against the public devnet rate limit (~5 RPS) reported on 2026-05-25.
+ *
+ * Cache is keyed by signature, not by (signature, user) — a tx has the
+ * same decoded shape no matter which wallet is looking at it. The
+ * USDC-delta-for-user is computed per call from the cached tx record's
+ * stored fields, but since we cache the final `UserTx` shape (which
+ * already includes `usdcDeltaMicros` filtered by user), the value is
+ * valid only for ONE user. To keep it that way, the cache key embeds the
+ * user's base58 so two wallets in the same tab don't see each other's
+ * deltas. Realistic upper bound on cache entries: a power user makes
+ * ~hundreds of trades a month → ~hundreds of entries → small enough to
+ * keep forever in this module's lifetime.
+ */
+const decodedSigCache = new Map<string, UserTx>();
+function cacheKey(signature: string, userBase58: string): string {
+  return `${signature}|${userBase58}`;
+}
+
+/** True when an error message looks like a public-RPC rate-limit response. */
+export function looksRateLimited(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /too many requests|429|rate limit/i.test(msg);
+}
+
+export function useUserHistory(limit = 30, days = 30) {
   const { connection } = useConnection();
   const { publicKey } = useWallet();
   return useQuery<UserTx[]>({
     queryKey: ["user-history", publicKey?.toBase58() ?? "?", limit, days],
     enabled: !!publicKey,
+    // History is NOT real-time — a confirmed tx is durable forever and
+    // appearing 20 seconds later is acceptable. 20s polling, combined
+    // with the per-signature cache below, gives the page a "fresh enough"
+    // feel while staying well under the public devnet's ~5 RPS budget.
+    // The old 8s interval was a major contributor to the
+    // "Too many requests for a specific RPC call" error reported
+    // 2026-05-25.
+    refetchInterval: 20_000,
+    refetchIntervalInBackground: false,
+    // Per-query retry policy override (queryClient default is `retry: 1`
+    // with no backoff). Public devnet rate-limits return fast and clear
+    // up within a couple of seconds, so an exponential backoff giving 3
+    // attempts buys us a 1s + 2s + 4s = 7s recovery window without
+    // pestering the user.
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1_000 * 2 ** attemptIndex, 8_000),
+    // Keep prior data visible while the next refetch is in flight (and
+    // during retries). Without this the History table flashes empty on
+    // every refresh interval.
+    placeholderData: (previous) => previous,
     queryFn: async () => {
       if (!publicKey) return [];
+      // Pull enough to cover the window after we filter out non-Meridian
+      // txs. The 4x oversample is a heuristic — the user's wallet may
+      // also be receiving USDC, airdropping SOL, etc., none of which are
+      // Meridian txs. Cap at 200 (was 500) to keep the
+      // getSignaturesForAddress page lean against the rate limit.
       const sigs = await connection.getSignaturesForAddress(publicKey, {
-        // Pull enough to cover the window after we filter out non-Meridian txs.
-        limit: Math.min(Math.max(limit * 4, 100), 500),
+        limit: Math.min(Math.max(limit * 4, 80), 200),
       });
       if (sigs.length === 0) return [];
       const cutoffUnix = Math.floor(Date.now() / 1000) - days * 24 * 3600;
       const inWindow = sigs.filter((s) => (s.blockTime ?? Number.MAX_SAFE_INTEGER) >= cutoffUnix);
-      const signatures = inWindow.map((s) => s.signature);
-      if (signatures.length === 0) return [];
-      const chunks: string[][] = [];
-      for (let i = 0; i < signatures.length; i += 50) chunks.push(signatures.slice(i, i + 50));
-      const meridianPid = programIdPubkey().toBase58();
       const userBase58 = publicKey.toBase58();
+      const meridianPid = programIdPubkey().toBase58();
+      // Split the in-window signatures into "already decoded in cache"
+      // and "need to fetch + decode". Cache HITS short-circuit straight
+      // into the result. Cache MISSES go to getParsedTransactions in
+      // 50-batched chunks.
       const out: UserTx[] = [];
-      for (const chunk of chunks) {
-        const txs = await connection.getParsedTransactions(chunk, {
-          maxSupportedTransactionVersion: 0,
-          commitment: "confirmed",
-        });
-        for (let i = 0; i < txs.length; i++) {
-          const tx = txs[i];
-          if (!tx) continue;
-          const ixs = tx.transaction.message.instructions;
-          const meridianIxs = ixs.filter((ix) => ix.programId.toBase58() === meridianPid);
-          if (meridianIxs.length === 0) continue;
-          const firstIx = meridianIxs[0]!;
-          const decoded = decodeIx(firstIx);
-          const method = decoded?.method ?? "meridian:unknown";
-          const label = decoded ? humanLabel(decoded) : method;
-          const err = tx.meta?.err;
-          const success = err == null;
-          const delta = usdcDeltaForUser(tx, userBase58);
-          const errLogLine = success
-            ? undefined
-            : tx.meta?.logMessages?.find((l) => l.toLowerCase().includes("err"));
-          const record: UserTx = {
-            signature: chunk[i]!,
-            slot: tx.slot,
-            blockTime: tx.blockTime ?? null,
-            label,
-            method,
-            success,
-          };
-          if (delta !== undefined && delta !== 0n) record.usdcDeltaMicros = delta;
-          if (errLogLine) record.errLog = errLogLine.slice(0, 160);
-          out.push(record);
-          if (out.length >= limit) break;
+      const toFetch: string[] = [];
+      const fetchOrder: string[] = []; // preserves chronological order
+      for (const s of inWindow) {
+        const k = cacheKey(s.signature, userBase58);
+        const hit = decodedSigCache.get(k);
+        if (hit) {
+          out.push(hit);
+          fetchOrder.push(s.signature);
+          continue;
         }
-        if (out.length >= limit) break;
+        toFetch.push(s.signature);
+        fetchOrder.push(s.signature);
       }
-      return out;
+      if (toFetch.length > 0) {
+        const chunks: string[][] = [];
+        for (let i = 0; i < toFetch.length; i += 50) chunks.push(toFetch.slice(i, i + 50));
+        for (const chunk of chunks) {
+          if (out.length >= limit) break;
+          const txs = await connection.getParsedTransactions(chunk, {
+            maxSupportedTransactionVersion: 0,
+            commitment: "confirmed",
+          });
+          for (let i = 0; i < txs.length; i++) {
+            const tx = txs[i];
+            const sig = chunk[i]!;
+            if (!tx) continue;
+            const ixs = tx.transaction.message.instructions;
+            const meridianIxs = ixs.filter((ix) => ix.programId.toBase58() === meridianPid);
+            if (meridianIxs.length === 0) continue;
+            const firstIx = meridianIxs[0]!;
+            const decoded = decodeIx(firstIx);
+            const method = decoded?.method ?? "meridian:unknown";
+            const label = decoded ? humanLabel(decoded) : method;
+            const err = tx.meta?.err;
+            const success = err == null;
+            const delta = usdcDeltaForUser(tx, userBase58);
+            const errLogLine = success
+              ? undefined
+              : tx.meta?.logMessages?.find((l) => l.toLowerCase().includes("err"));
+            const record: UserTx = {
+              signature: sig,
+              slot: tx.slot,
+              blockTime: tx.blockTime ?? null,
+              label,
+              method,
+              success,
+            };
+            if (delta !== undefined && delta !== 0n) record.usdcDeltaMicros = delta;
+            if (errLogLine) record.errLog = errLogLine.slice(0, 160);
+            decodedSigCache.set(cacheKey(sig, userBase58), record);
+            out.push(record);
+            if (out.length >= limit) break;
+          }
+        }
+      }
+      // Sort by blockTime descending so the table renders newest-first
+      // regardless of cache/fetch interleaving.
+      out.sort((a, b) => (b.blockTime ?? 0) - (a.blockTime ?? 0));
+      return out.slice(0, limit);
     },
-    refetchInterval: 8_000,
   });
 }

@@ -5,14 +5,11 @@
 // one click to Solana Explorer for the full audit trail.
 
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useUserHistory, type UserTx } from "@/hooks/useUserHistory";
+import { looksRateLimited, useUserHistory, type UserTx } from "@/hooks/useUserHistory";
+import { explorerAddressUrl, explorerTxUrl } from "@/lib/cluster";
 import { formatUsdc, usdcFromBase } from "@/lib/usdc";
 
 export const dynamic = "force-dynamic";
-
-function explorerTx(sig: string) {
-  return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
-}
 
 function fmtTime(unix: number | null) {
   if (!unix) return "—";
@@ -43,7 +40,22 @@ function fmtDelta(deltaMicros: bigint | undefined): { text: string; cls: string 
 
 export default function HistoryPage() {
   const { publicKey } = useWallet();
-  const history = useUserHistory(50, 30);
+  // 30-record window (was 50) cuts the per-refresh RPC volume by ~40% on
+  // the public devnet endpoint. Combined with the in-hook
+  // signature-decode cache, this is the front-end's leg of the
+  // rate-limit fix; the rear leg (Helius / Triton / QuickNode dedicated
+  // endpoint via NEXT_PUBLIC_SOLANA_RPC_URL) is the only path to fully
+  // eliminate the throttle.
+  const history = useUserHistory(30, 30);
+  const errorMessage = history.error
+    ? (history.error as Error)?.message ?? String(history.error)
+    : null;
+  // Detect the specific "Too many requests" path so the UI can frame the
+  // failure correctly ("the public RPC throttled us") instead of leaving
+  // the user staring at an unactionable red banner. The retry button
+  // calls history.refetch() — by then the rate-limit window has usually
+  // cleared.
+  const rateLimited = errorMessage !== null && looksRateLimited(history.error);
 
   if (!publicKey) {
     return (
@@ -59,15 +71,47 @@ export default function HistoryPage() {
       <h1 className="mb-2 text-3xl font-bold">History</h1>
       <p className="mb-8 text-muted">
         Your Meridian program transactions for{" "}
-        <span className="font-mono">{publicKey.toBase58().slice(0, 8)}…</span> over the last 30 days. Refreshes every 8s.
+        <span className="font-mono">{publicKey.toBase58().slice(0, 8)}…</span> over the last 30 days. Refreshes every 20s.
       </p>
 
       <div className="rounded-2xl border border-panel bg-panel/40 p-5">
         {history.isLoading && <p className="text-muted">Loading recent transactions…</p>}
-        {history.isError && (
-          <p className="rounded border border-no/40 bg-no/10 p-3 text-no">
-            Could not load history: {(history.error as Error)?.message ?? String(history.error)}
-          </p>
+        {history.isError && rateLimited && (
+          <div className="rounded border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+            <p className="font-semibold">Public devnet RPC throttled us.</p>
+            <p className="mt-1 text-yellow-100/90">
+              <span className="font-mono">api.devnet.solana.com</span> caps requests per IP, and the
+              call to load history hit that cap. This is a rate-limit, not a real failure — the data
+              is fine, the RPC just refused to send it for a few seconds.
+            </p>
+            <p className="mt-1 text-yellow-100/90">
+              The page auto-retries with backoff, but you can also manually retry now. For a
+              permanent fix, switch{" "}
+              <span className="font-mono">NEXT_PUBLIC_SOLANA_RPC_URL</span> to a dedicated endpoint
+              (Helius, Triton, QuickNode — all have free-tier devnet plans).
+            </p>
+            <button
+              type="button"
+              onClick={() => void history.refetch()}
+              className="mt-2 rounded-lg border border-yellow-500/50 bg-yellow-500/20 px-3 py-1 text-xs font-semibold text-yellow-100 hover:bg-yellow-500/30"
+              disabled={history.isFetching}
+            >
+              {history.isFetching ? "Retrying…" : "Retry now"}
+            </button>
+          </div>
+        )}
+        {history.isError && !rateLimited && (
+          <div className="rounded border border-no/40 bg-no/10 p-3 text-no">
+            <p>Could not load history: {errorMessage}</p>
+            <button
+              type="button"
+              onClick={() => void history.refetch()}
+              className="mt-2 rounded-lg border border-no/50 bg-no/20 px-3 py-1 text-xs font-semibold text-no hover:bg-no/30"
+              disabled={history.isFetching}
+            >
+              {history.isFetching ? "Retrying…" : "Retry"}
+            </button>
+          </div>
         )}
         {!history.isLoading && (history.data?.length ?? 0) === 0 && (
           <p className="text-sm text-muted">
@@ -112,7 +156,7 @@ export default function HistoryPage() {
                     <td className="px-3 py-2">
                       <a
                         className="text-accent"
-                        href={explorerTx(t.signature)}
+                        href={explorerTxUrl(t.signature)}
                         target="_blank"
                         rel="noreferrer"
                       >
@@ -131,7 +175,7 @@ export default function HistoryPage() {
         Full audit on{" "}
         <a
           className="text-accent underline"
-          href={`https://explorer.solana.com/address/${publicKey.toBase58()}?cluster=devnet`}
+          href={explorerAddressUrl(publicKey.toBase58())}
           target="_blank"
           rel="noreferrer"
         >
