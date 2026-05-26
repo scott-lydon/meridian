@@ -10,7 +10,7 @@ import { ConnectWalletButton } from "@/components/ConnectWalletButton";
 import { InfoTip } from "@/components/InfoTip";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
-import { useTrade, deriveMarketAddresses } from "@/hooks/useTrade";
+import { useTrade, deriveMarketAddresses, TradeTxError } from "@/hooks/useTrade";
 import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
@@ -166,6 +166,16 @@ export default function TradePage({
   // request, and we can correlate it with the full error written to
   // window.console. See `hashForErrorId` above for the algorithm.
   const [lastErrId, setLastErrId] = useState<string | null>(null);
+  // Program logs captured from a failed simulation (via TradeTxError.logs).
+  // Surfaced beneath the toast in a collapsible <details> so the user can
+  // copy the on-chain trace into a support request without having to open
+  // devtools. Cleared on dismiss and on next action.
+  const [lastErrLogs, setLastErrLogs] = useState<readonly string[] | null>(null);
+  // Failure-kind discriminator from TradeTxError. Drives the remediation
+  // copy in the toast (e.g. "reconnect your wallet" for
+  // wallet_session_stale vs "initialize the order book" for
+  // simulation_reverted with the specific log signature).
+  const [lastErrKind, setLastErrKind] = useState<TradeTxError["kind"] | "unknown" | null>(null);
   // Collapsible state for the "Why some buttons are disabled" panel.
   // Default collapsed per user preference; clicking the heading row
   // expands it. State is component-local because the user's reasoning
@@ -295,11 +305,15 @@ export default function TradePage({
     if (!publicKey) {
       setLastErr("Connect a wallet first.");
       setLastErrId(null);
+      setLastErrKind("wallet_session_stale");
+      setLastErrLogs(null);
       return;
     }
     setBusy(label);
     setLastErr(null);
     setLastErrId(null);
+    setLastErrKind(null);
+    setLastErrLogs(null);
     setLastSig(null);
     setLastDelta(null);
     try {
@@ -316,15 +330,37 @@ export default function TradePage({
       // ID for the on-screen toast. The user-facing message stays
       // human-readable; the long stack/RPC verbatim never collides with
       // the toast layout.
+      //
+      // Branch on TradeTxError so the toast renders the most useful
+      // shape: the typed message + remediation hint for kind, the
+      // program logs for simulation_reverted, etc. For untyped errors
+      // (anything not from useTrade's simulateAndSend funnel) we fall
+      // through to .message.
       const fullText = e instanceof Error ? (e.stack ?? e.message) : String(e);
-      const shortMessage = e instanceof Error ? e.message : String(e);
       const errId = hashForErrorId(`${label}|${publicKey.toBase58()}|${market}|${fullText}`);
+      // Use name-based check ALONGSIDE instanceof so a duplicate-module
+      // hoisting (pnpm sometimes ships two copies of internal modules)
+      // can't make this catch silently lose the typed shape.
+      const isTradeTx =
+        e instanceof TradeTxError ||
+        (e instanceof Error && e.name === "TradeTxError");
+      if (isTradeTx) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tx = e as any;
+        setLastErr(`${label} failed: ${tx.message}`);
+        setLastErrKind(tx.kind ?? "unknown");
+        setLastErrLogs(Array.isArray(tx.logs) ? tx.logs : null);
+      } else {
+        const shortMessage = e instanceof Error ? e.message : String(e);
+        setLastErr(shortMessage);
+        setLastErrKind("unknown");
+        setLastErrLogs(null);
+      }
+      setLastErrId(errId);
       console.error(
         `[meridian trade] action="${label}" errId=${errId} market=${market} wallet=${publicKey.toBase58()}`,
         e,
       );
-      setLastErr(shortMessage);
-      setLastErrId(errId);
       setLastDelta(null);
     } finally {
       setBusy(null);
@@ -432,7 +468,53 @@ export default function TradePage({
                     </button>
                   )}
                 </div>
-                <p className="break-words text-xs text-no/80">{lastErr}</p>
+                <p className="whitespace-pre-line break-words text-xs text-no/80">{lastErr}</p>
+                {lastErrKind === "wallet_session_stale" && (
+                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
+                    <strong>Fix:</strong> click <span className="font-mono">Select Wallet</span> in the
+                    header, pick your wallet, approve the popup. If the extension shows a stuck pending
+                    request, dismiss it from the extension icon first.
+                  </p>
+                )}
+                {lastErrKind === "simulation_reverted" && (
+                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
+                    <strong>The Solana program rejected the transaction.</strong> The last program log
+                    above is the cause. Common signatures: &quot;AccountLoader&quot; → the order book PDA
+                    is not initialized (use the repair button in the order-book panel); &quot;InsufficientBalance&quot;
+                    → not enough tokens of the right kind; &quot;MarketAlreadySettled&quot; → trade after expiry.
+                  </p>
+                )}
+                {lastErrKind === "wallet_send_failed" && (
+                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
+                    <strong>The wallet refused to send the transaction.</strong> Simulation passed, so
+                    the program was happy with the request. Open the wallet extension; if it shows a
+                    pending request, approve or dismiss it. Confirm the wallet is on Solana Devnet (the
+                    DEVNET pill in the header has click-by-click switch instructions).
+                  </p>
+                )}
+                {lastErrLogs && lastErrLogs.length > 0 && (
+                  <details className="mt-2 rounded border border-no/30 bg-no/5 p-1.5">
+                    <summary className="cursor-pointer text-[11px] font-semibold text-no/90">
+                      Program logs ({lastErrLogs.length} line{lastErrLogs.length === 1 ? "" : "s"}) — click to expand
+                    </summary>
+                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-no/80">
+                      {lastErrLogs.join("\n")}
+                    </pre>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          void navigator.clipboard?.writeText(lastErrLogs.join("\n"));
+                        } catch {
+                          // best effort
+                        }
+                      }}
+                      className="mt-1 rounded border border-no/40 bg-no/10 px-2 py-0.5 text-[10px] text-no hover:bg-no/20"
+                    >
+                      Copy logs
+                    </button>
+                  </details>
+                )}
                 {lastErrId && (
                   <p className="mt-1 text-[10px] text-muted">
                     Full error written to the browser console under this ID. Open devtools
@@ -448,6 +530,8 @@ export default function TradePage({
               setLastSig(null);
               setLastErr(null);
               setLastErrId(null);
+              setLastErrKind(null);
+              setLastErrLogs(null);
               setLastDelta(null);
             }}
             className="rounded p-1 text-muted hover:bg-panel hover:text-text"

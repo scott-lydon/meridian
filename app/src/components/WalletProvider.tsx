@@ -266,10 +266,25 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
     // `sendTransaction` promise rejection already owns these — see the
     // trade page `run()` catch — so skipping the global banner here
     // avoids double-surfacing and the wrong title.
-    if (
+    //
+    // WTF heads-up: the `instanceof` check is BACKED UP with a name-based
+    // check because pnpm sometimes hoists two copies of
+    // `@solana/wallet-adapter-base` (one for the picker, one for the
+    // adapter). When that happens the error thrown by the adapter is a
+    // `WalletSendTransactionError` from copy A, but the `instanceof`
+    // check here imports copy B's class object — different reference,
+    // check returns false, and the misleading "Wallet didn't connect"
+    // banner appears for a send failure. The 2026-05-26 user-testing
+    // report ("Wallet error: WalletSendTransactionError — Internal
+    // error" under the Wallet didn't connect banner with the wallet
+    // visibly connected) was exactly this path. The `err.name` fallback
+    // is robust to that.
+    const looksLikeSendOrSignFailure =
       err instanceof WalletSendTransactionError ||
-      err instanceof WalletSignTransactionError
-    ) {
+      err instanceof WalletSignTransactionError ||
+      err.name === "WalletSendTransactionError" ||
+      err.name === "WalletSignTransactionError";
+    if (looksLikeSendOrSignFailure) {
       return;
     }
 
