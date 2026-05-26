@@ -12,6 +12,42 @@
 
 import { useEffect, useRef, useState } from "react";
 
+// Per-tab dismissal of the AfterHoursBanner strip. Stored in
+// sessionStorage (not localStorage) so closing and reopening the browser
+// brings the banner back — the safety reminder must survive normal
+// "I'm just dismissing this banner right now" without permanently
+// hiding the active-test-mode warning. Resets whenever the toggle is
+// flipped OFF and ON again, so the user always sees the banner once
+// per testing session.
+const BANNER_DISMISSED_SESSION_KEY = "meridian.afterHoursBannerDismissed";
+const BANNER_DISMISSED_EVENT = "meridian:afterHoursBannerDismissedChanged";
+
+function readBannerDismissed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.sessionStorage.getItem(BANNER_DISMISSED_SESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setBannerDismissed(value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (value) {
+      window.sessionStorage.setItem(BANNER_DISMISSED_SESSION_KEY, "1");
+    } else {
+      window.sessionStorage.removeItem(BANNER_DISMISSED_SESSION_KEY);
+    }
+  } catch (err) {
+    // Private browsing / disabled storage. Surface to the console so the
+    // operator understands why "X" appears to no-op; do not throw — the
+    // page still functions with the banner visible.
+    console.error("afterHoursBanner: failed to persist dismissal state", err);
+  }
+  window.dispatchEvent(new Event(BANNER_DISMISSED_EVENT));
+}
+
 import { useAdminMode } from "@/lib/adminMode";
 import { useAfterHoursMode } from "@/lib/afterHoursMode";
 
@@ -131,36 +167,90 @@ export function AfterHoursModeToggle() {
 /**
  * Persistent top-of-page strip rendered when after-hours mode is ON.
  * Acts as the constant visual reminder that the gates are relaxed, plus
- * a one-click "Turn off" so the user never has to hunt for the toggle.
+ * two one-click affordances:
+ *   - "Turn off →" disables the entire testing mode (preserves prior behavior).
+ *   - "✕"        dismisses the BANNER for this tab session only, leaving
+ *                 the mode ON. Cleared when (a) the user opens a new
+ *                 tab/browser, or (b) the toggle is flipped OFF then ON
+ *                 again, so the safety reminder is always shown at the
+ *                 start of every new testing session.
+ *
  * Lives in the layout above page content; height collapses to zero when
- * the flag is OFF so it doesn't shift layout in the normal case.
+ * the flag is OFF or the user has dismissed it in this session so it
+ * doesn't shift layout in the normal case.
  */
 export function AfterHoursBanner() {
   const [enabled, setEnabled] = useAfterHoursMode();
   const adminUnlocked = useAdminMode();
-  // Only show the banner when (a) admin has unlocked and (b) the toggle is
-  // ON. Without the admin guard, a user who flipped the toggle and then
-  // signed out would keep seeing the banner forever even though the
-  // affordance is meant to be hidden. Both flags are localStorage so this
-  // path is reachable.
-  if (!adminUnlocked || !enabled) return null;
+  // Local mirror of sessionStorage so the component re-renders when the
+  // close button is clicked or when another tab/another component
+  // toggles the dismissal state. Hydration-safe: the effect re-reads
+  // after mount so SSR HTML matches.
+  const [dismissed, setDismissedState] = useState(false);
+  useEffect(() => {
+    function sync() {
+      setDismissedState(readBannerDismissed());
+    }
+    sync();
+    window.addEventListener(BANNER_DISMISSED_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(BANNER_DISMISSED_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  // Clear the dismissal flag whenever the user toggles testing mode OFF
+  // so the next time they enable it, the banner re-appears for the
+  // safety reminder. Without this, dismissing once would silence the
+  // banner across every future enable-disable-enable cycle in the same
+  // tab session.
+  const lastEnabledRef = useRef<boolean>(enabled);
+  useEffect(() => {
+    if (lastEnabledRef.current === true && enabled === false) {
+      setBannerDismissed(false);
+    }
+    lastEnabledRef.current = enabled;
+  }, [enabled]);
+
+  // Only show the banner when (a) admin has unlocked, (b) the toggle is
+  // ON, and (c) the user has not closed it this session. Without the
+  // admin guard, a user who flipped the toggle and then signed out
+  // would keep seeing the banner forever even though the affordance is
+  // meant to be hidden. All three flags are reachable independently.
+  if (!adminUnlocked || !enabled || dismissed) return null;
   return (
     <div
       role="status"
       aria-live="polite"
-      className="sticky top-[57px] z-10 border-b border-amber-500/40 bg-amber-500/15 px-4 py-2 text-center text-xs text-amber-300"
+      className="sticky top-[57px] z-10 flex items-center justify-center gap-2 border-b border-amber-500/40 bg-amber-500/15 px-4 py-2 text-center text-xs text-amber-300"
     >
-      <span className="font-semibold">🧪 After-hours testing mode is ON</span>{" "}
-      <span className="text-amber-300/80">
-        — UI expiry gates relaxed. The program already allows these transactions; only the
-        product&apos;s wall-clock rules are bypassed.
-      </span>{" "}
+      <span className="flex-1">
+        <span className="font-semibold">🧪 After-hours testing mode is ON</span>{" "}
+        <span className="text-amber-300/80">
+          — UI expiry gates relaxed. The program already allows these transactions; only the
+          product&apos;s wall-clock rules are bypassed.
+        </span>{" "}
+        <button
+          type="button"
+          onClick={() => setEnabled(false)}
+          className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20"
+        >
+          Turn off →
+        </button>
+      </span>
       <button
         type="button"
-        onClick={() => setEnabled(false)}
-        className="ml-2 inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20"
+        onClick={() => setBannerDismissed(true)}
+        className="rounded p-1 text-amber-300/80 hover:bg-amber-500/15 hover:text-amber-200"
+        aria-label="Dismiss the after-hours testing banner for this session (mode stays ON)"
+        title={
+          "Dismiss this banner for the current tab session. Testing mode stays ON; the " +
+          "banner reappears in a new tab, after a browser restart, or after you toggle " +
+          "the mode OFF and back ON."
+        }
       >
-        Turn off →
+        ✕
       </button>
     </div>
   );
