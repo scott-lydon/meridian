@@ -384,7 +384,7 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
           // exact path users were getting stuck on before this fix.
           <section className="mb-5">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
-              Already installed but not detected?
+              Extension installed but wallet not detected.
             </p>
             <p className="mb-3 rounded-lg border border-accent/30 bg-accent/10 p-3 text-xs text-text">
               <span className="font-semibold">Sign in to the extension first.</span>{" "}
@@ -396,33 +396,56 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
             </p>
             <ul className="space-y-2">
               {installedButNotDetected.map((w) => (
-                <li
-                  key={w.adapter.name}
-                  className="flex w-full items-center gap-3 rounded-xl border border-panel bg-panel/20 px-4 py-3 text-left text-muted"
-                  title={
-                    `${w.adapter.name} is not detected on this page. ` +
-                    `Open the ${w.adapter.name} extension, sign in / unlock if needed, ` +
-                    `then reload Meridian to make it clickable here.`
-                  }
-                >
-                  {w.adapter.icon ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={w.adapter.icon}
-                      alt=""
-                      className="h-7 w-7 rounded opacity-60"
-                      width={28}
-                      height={28}
-                    />
-                  ) : (
-                    <span className="grid h-7 w-7 place-items-center rounded bg-panel text-xs font-bold text-muted opacity-60">
-                      {w.adapter.name[0]}
+                <li key={w.adapter.name}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Attempt to connect anyway. Three outcomes:
+                      //   (a) Some wallets register their global lazily on a
+                      //       user-gesture select() — in which case the
+                      //       click flips readyState to Installed and the
+                      //       connect succeeds. Best case it just works.
+                      //   (b) If the extension is genuinely not yet signed
+                      //       in, the adapter throws WalletNotReadyError,
+                      //       which WalletProvider.onWalletError converts
+                      //       into the action-oriented "open the extension,
+                      //       unlock, then click connect again" banner via
+                      //       describeWalletError. The user gets a
+                      //       prescription, not a dead-end row.
+                      //   (c) On Safari where the Wallet Standard handshake
+                      //       is racy, the select() itself can sometimes
+                      //       win the race that auto-discovery lost.
+                      // All three outcomes are strictly better than the
+                      // previous non-interactive row.
+                      void onPickWallet(w.adapter.name);
+                    }}
+                    className="flex w-full items-center gap-3 rounded-xl border border-panel bg-panel/20 px-4 py-3 text-left text-muted transition hover:border-accent/60 hover:bg-panel/40 hover:text-text"
+                    title={
+                      `Click to attempt connect to ${w.adapter.name}. If the extension is not yet ` +
+                      `signed in / unlocked, an error banner will tell you exactly what to do. ` +
+                      `Some wallets register on user-gesture select, so the click itself can ` +
+                      `succeed even when auto-detection missed.`
+                    }
+                  >
+                    {w.adapter.icon ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={w.adapter.icon}
+                        alt=""
+                        className="h-7 w-7 rounded opacity-60"
+                        width={28}
+                        height={28}
+                      />
+                    ) : (
+                      <span className="grid h-7 w-7 place-items-center rounded bg-panel text-xs font-bold text-muted opacity-60">
+                        {w.adapter.name[0]}
+                      </span>
+                    )}
+                    <span className="font-medium">{w.adapter.name}</span>
+                    <span className="ml-auto rounded-full border border-panel bg-panel/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                      try connect
                     </span>
-                  )}
-                  <span className="font-medium">{w.adapter.name}</span>
-                  <span className="ml-auto rounded-full border border-panel bg-panel/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                    sign in to detect
-                  </span>
+                  </button>
                 </li>
               ))}
             </ul>
