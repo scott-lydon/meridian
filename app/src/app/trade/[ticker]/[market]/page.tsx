@@ -14,7 +14,7 @@ import { ConnectWalletButton } from "@/components/ConnectWalletButton";
 import { InfoTip } from "@/components/InfoTip";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
-import { useTrade, deriveMarketAddresses, TradeTxError } from "@/hooks/useTrade";
+import { useTrade, deriveMarketAddresses, TradeTxError, type TradeTxHero } from "@/hooks/useTrade";
 import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
@@ -180,6 +180,16 @@ export default function TradePage({
   // wallet_session_stale vs "initialize the order book" for
   // simulation_reverted with the specific log signature).
   const [lastErrKind, setLastErrKind] = useState<TradeTxError["kind"] | "unknown" | null>(null);
+  // Parsed hero block (headline + detail + optional CTA). Populated when
+  // simulateAndSend attaches a recognized Anchor error variant. Drives
+  // the new clean toast layout; the raw program logs (lastErrLogs) get
+  // hidden inside a collapsible "Technical details" disclosure when
+  // a hero is present, since they're redundant for the happy diagnostic
+  // case (InsufficientBalance + balance numbers, MarketAlreadySettled,
+  // etc.) and only useful when the hero is absent or vague.
+  const [lastErrHero, setLastErrHero] = useState<TradeTxHero | null>(null);
+  // Toggle for the collapsible technical-details block beneath the toast.
+  const [errDetailsExpanded, setErrDetailsExpanded] = useState(false);
   // Collapsible state for the "Why some buttons are disabled" panel.
   // Default collapsed per user preference; clicking the heading row
   // expands it. State is component-local because the user's reasoning
@@ -341,6 +351,8 @@ export default function TradePage({
     setLastErrId(null);
     setLastErrKind(null);
     setLastErrLogs(null);
+    setLastErrHero(null);
+    setErrDetailsExpanded(false);
     setLastSig(null);
     setLastDelta(null);
     try {
@@ -377,12 +389,15 @@ export default function TradePage({
         setLastErr(`${label} failed: ${tx.message}`);
         setLastErrKind(tx.kind ?? "unknown");
         setLastErrLogs(Array.isArray(tx.logs) ? tx.logs : null);
+        setLastErrHero(tx.hero ?? null);
       } else {
         const shortMessage = e instanceof Error ? e.message : String(e);
         setLastErr(shortMessage);
         setLastErrKind("unknown");
         setLastErrLogs(null);
+        setLastErrHero(null);
       }
+      setErrDetailsExpanded(false);
       setLastErrId(errId);
       console.error(
         `[meridian trade] action="${label}" errId=${errId} market=${market} wallet=${publicKey.toBase58()}`,
@@ -438,120 +453,195 @@ export default function TradePage({
         </div>
       </header>
 
-      {/* Tx success / failure toast — prominent at top so users don't miss it.
-          Dismissable; auto-clears 12s after the most recent change via the
-          useEffect on lastSig/lastErr below. */}
-      {(lastSig || lastErr) && (
+      {/* Tx success toast — accent-tinted, dismissable. */}
+      {lastSig && (
         <div className="mb-6 flex items-start justify-between gap-4 rounded-2xl border border-accent/60 bg-accent/15 p-4">
-          {lastSig && (
-            <div className="flex items-center gap-3 text-sm">
-              <span className="text-xl text-yes">✓</span>
-              <div>
-                <p className="font-semibold text-text">Transaction confirmed</p>
-                {lastDelta && (
-                  // Predicted delta (not measured) — see the comment on
-                  // `lastDelta` state. Surfacing it inline is the single
-                  // biggest fix to the "I tapped mint pair and nothing
-                  // visible changed" complaint, because the pills don't
-                  // tick until the next 3s refetch window.
-                  <p className="mt-0.5 font-mono text-sm text-yes">{lastDelta}</p>
-                )}
-                <p className="text-xs text-muted">
-                  <a className="text-accent underline" href={explorerTxUrl(lastSig)} target="_blank" rel="noreferrer">
-                    View on Solana Explorer →
-                  </a>
-                  <span className="ml-2 font-mono">{lastSig.slice(0, 10)}…{lastSig.slice(-6)}</span>
+          <div className="flex items-center gap-3 text-sm">
+            <span className="text-xl text-yes">✓</span>
+            <div>
+              <p className="font-semibold text-text">Transaction confirmed</p>
+              {lastDelta && (
+                <p className="mt-0.5 font-mono text-sm text-yes">{lastDelta}</p>
+              )}
+              <p className="text-xs text-muted">
+                <a className="text-accent underline" href={explorerTxUrl(lastSig)} target="_blank" rel="noreferrer">
+                  View on Solana Explorer →
+                </a>
+                <span className="ml-2 font-mono">{lastSig.slice(0, 10)}…{lastSig.slice(-6)}</span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              setLastSig(null);
+              setLastDelta(null);
+            }}
+            className="rounded p-1 text-muted hover:bg-panel hover:text-text"
+            aria-label="Dismiss"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Tx failure card.
+          Solid dark panel background with a thin red border accent — not a
+          translucent red fill. Reported 2026-05-26 by the user: the prior
+          translucent red blob "looked like crap". This new layout puts the
+          parsed hero block (headline + detail + optional CTA) at the top
+          and hides the raw err code + program logs inside a collapsible
+          "Technical details" disclosure that defaults closed. When the
+          parser couldn't produce a hero (older codepaths, network
+          errors, etc.) the fallback message renders in place. */}
+      {lastErr && (
+        <div className="mb-6 overflow-hidden rounded-2xl border-2 border-no/70 bg-panel shadow-lg">
+          <div className="flex items-start justify-between gap-4 border-b border-no/30 bg-no/15 px-5 py-4">
+            <div className="flex items-start gap-3">
+              <span aria-hidden className="text-2xl leading-none text-no">!</span>
+              <div className="min-w-0">
+                <p className="text-base font-semibold text-text">
+                  {lastErrHero?.headline ?? "Transaction failed"}
                 </p>
+                {lastErrHero?.detail && (
+                  <p className="mt-1 text-sm text-text/80">{lastErrHero.detail}</p>
+                )}
               </div>
             </div>
+            <button
+              onClick={() => {
+                setLastErr(null);
+                setLastErrId(null);
+                setLastErrKind(null);
+                setLastErrLogs(null);
+                setLastErrHero(null);
+                setErrDetailsExpanded(false);
+              }}
+              className="flex-shrink-0 rounded p-1 text-muted hover:bg-panel/80 hover:text-text"
+              aria-label="Dismiss"
+              title="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Inline call-to-action (e.g., the devnet USDC faucet link when
+              the parser detected InsufficientBalance). Renders right
+              below the hero so the user's eye lands on the next action. */}
+          {lastErrHero?.cta && (
+            <div className="border-b border-no/20 bg-bg/30 px-5 py-3">
+              <a
+                href={lastErrHero.cta.href}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:bg-accentHover"
+              >
+                {lastErrHero.cta.label}
+              </a>
+            </div>
           )}
-          {lastErr && (
-            <div className="flex items-start gap-3 text-sm">
-              <span className="text-xl text-no">!</span>
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <p className="font-semibold text-no">Transaction failed</p>
+
+          {/* When the parser couldn't produce a hero, surface the raw
+              fallback message string here (still solid background, no
+              translucent red blob) so the user always sees SOMETHING
+              human-shaped above the technical details. */}
+          {!lastErrHero && (
+            <div className="border-b border-no/20 bg-bg/30 px-5 py-3">
+              <p className="whitespace-pre-line break-words text-sm text-text/80">{lastErr}</p>
+              {lastErrKind === "wallet_session_stale" && (
+                <p className="mt-2 text-xs text-muted">
+                  <strong>Fix:</strong> click <span className="font-mono">Select Wallet</span> in the
+                  header, pick your wallet, approve the popup. If the extension shows a stuck pending
+                  request, dismiss it from the extension icon first.
+                </p>
+              )}
+              {lastErrKind === "wallet_send_failed" && (
+                <p className="mt-2 text-xs text-muted">
+                  <strong>The wallet refused to send the transaction.</strong> Open the wallet extension
+                  and approve / dismiss any pending request. Confirm the wallet is on Solana Devnet.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Collapsed "Technical details" — err id, program logs, copy
+              buttons. Defaults closed because the hero already explains
+              the problem in plain language for known errors; this block
+              is for support requests and devtool grepping. */}
+          {(lastErrId || (lastErrLogs && lastErrLogs.length > 0)) && (
+            <div className="px-5 py-3">
+              <button
+                type="button"
+                onClick={() => setErrDetailsExpanded((v) => !v)}
+                className="flex w-full items-center justify-between text-left text-xs font-semibold uppercase tracking-wider text-muted hover:text-text"
+                aria-expanded={errDetailsExpanded}
+              >
+                <span>Technical details</span>
+                <span aria-hidden className={`transition-transform ${errDetailsExpanded ? "rotate-90" : ""}`}>▶</span>
+              </button>
+              {errDetailsExpanded && (
+                <div className="mt-3 space-y-2 text-xs text-muted">
                   {lastErrId && (
-                    // Short correlation ID. Render as a copy-on-click pill
-                    // so the user can paste it into a support request or
-                    // a Slack message without selecting/copying the long
-                    // text below. The clipboard write is "best effort":
-                    // if the API is unavailable (HTTP context, etc.), the
-                    // user can still triple-click the pill to select-all.
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          void navigator.clipboard?.writeText(lastErrId);
-                        } catch {
-                          // Best effort — older Safari, file:// contexts.
-                          // Manual select-and-copy still works.
-                        }
-                      }}
-                      className="rounded-full border border-no/40 bg-no/10 px-2 py-0.5 font-mono text-[10px] text-no hover:bg-no/20"
-                      title="Click to copy this short error ID. Paste it into a support request; the full error is in your browser console (Cmd+Option+J / Ctrl+Shift+J), keyed by the same ID."
-                    >
-                      err id: {lastErrId} (click to copy)
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>Error ID:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            void navigator.clipboard?.writeText(lastErrId);
+                          } catch {
+                            // best effort
+                          }
+                        }}
+                        className="rounded-full border border-panel bg-panel/60 px-2 py-0.5 font-mono text-[10px] text-text hover:bg-panel"
+                        title="Click to copy"
+                      >
+                        {lastErrId} (copy)
+                      </button>
+                      <span className="text-[10px]">
+                        Full error in browser console (Cmd+Option+J / Ctrl+Shift+J), searchable by this
+                        ID.
+                      </span>
+                    </div>
+                  )}
+                  {lastErrLogs && lastErrLogs.length > 0 && (
+                    <details className="rounded border border-panel bg-bg/40 p-2" open>
+                      <summary className="cursor-pointer font-semibold text-text">
+                        Program logs ({lastErrLogs.length} line{lastErrLogs.length === 1 ? "" : "s"})
+                      </summary>
+                      <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-text/70">
+                        {lastErrLogs.join("\n")}
+                      </pre>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            void navigator.clipboard?.writeText(lastErrLogs.join("\n"));
+                          } catch {
+                            // best effort
+                          }
+                        }}
+                        className="mt-1 rounded border border-panel bg-panel/60 px-2 py-0.5 text-[10px] text-text hover:bg-panel"
+                      >
+                        Copy logs
+                      </button>
+                    </details>
                   )}
                 </div>
-                <p className="whitespace-pre-line break-words text-xs text-no/80">{lastErr}</p>
-                {lastErrKind === "wallet_session_stale" && (
-                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
-                    <strong>Fix:</strong> click <span className="font-mono">Select Wallet</span> in the
-                    header, pick your wallet, approve the popup. If the extension shows a stuck pending
-                    request, dismiss it from the extension icon first.
-                  </p>
-                )}
-                {lastErrKind === "simulation_reverted" && (
-                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
-                    <strong>The Solana program rejected the transaction.</strong> The last program log
-                    above is the cause. Common signatures: &quot;AccountLoader&quot; → the order book PDA
-                    is not initialized (use the repair button in the order-book panel); &quot;InsufficientBalance&quot;
-                    → not enough tokens of the right kind; &quot;MarketAlreadySettled&quot; → trade after expiry.
-                  </p>
-                )}
-                {lastErrKind === "wallet_send_failed" && (
-                  <p className="mt-1 rounded border border-no/30 bg-no/5 p-1.5 text-[11px] text-no/80">
-                    <strong>The wallet refused to send the transaction.</strong> Simulation passed, so
-                    the program was happy with the request. Open the wallet extension; if it shows a
-                    pending request, approve or dismiss it. Confirm the wallet is on Solana Devnet (the
-                    DEVNET pill in the header has click-by-click switch instructions).
-                  </p>
-                )}
-                {lastErrLogs && lastErrLogs.length > 0 && (
-                  <details className="mt-2 rounded border border-no/30 bg-no/5 p-1.5">
-                    <summary className="cursor-pointer text-[11px] font-semibold text-no/90">
-                      Program logs ({lastErrLogs.length} line{lastErrLogs.length === 1 ? "" : "s"}) — click to expand
-                    </summary>
-                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-no/80">
-                      {lastErrLogs.join("\n")}
-                    </pre>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          void navigator.clipboard?.writeText(lastErrLogs.join("\n"));
-                        } catch {
-                          // best effort
-                        }
-                      }}
-                      className="mt-1 rounded border border-no/40 bg-no/10 px-2 py-0.5 text-[10px] text-no hover:bg-no/20"
-                    >
-                      Copy logs
-                    </button>
-                  </details>
-                )}
-                {lastErrId && (
-                  <p className="mt-1 text-[10px] text-muted">
-                    Full error written to the browser console under this ID. Open devtools
-                    (Cmd+Option+J / Ctrl+Shift+J) and search for &quot;{lastErrId}&quot; for
-                    the verbatim stack + RPC payload.
-                  </p>
-                )}
-              </div>
+              )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Dummy: this branch was the original outer toast that wrapped
+          both success and failure. We've split it into two separate
+          cards above so each can have its own appropriate styling
+          (success keeps the accent tint, failure gets the new clean
+          panel). The dead block below is intentionally a no-op to
+          minimize git churn until a follow-up commit removes it. */}
+      {false && (
+        <div className="hidden">
           <button
             onClick={() => {
               setLastSig(null);
@@ -559,9 +649,11 @@ export default function TradePage({
               setLastErrId(null);
               setLastErrKind(null);
               setLastErrLogs(null);
+              setLastErrHero(null);
+              setErrDetailsExpanded(false);
               setLastDelta(null);
             }}
-            className="rounded p-1 text-muted hover:bg-panel hover:text-text"
+            className="hidden"
             aria-label="Dismiss"
             title="Dismiss"
           >
