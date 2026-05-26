@@ -222,6 +222,26 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
     [wallets],
   );
 
+  // Adapters that Meridian shipped support for but the Wallet Standard
+  // currently reports as NotDetected. This is the third state the picker
+  // used to conflate with "not installed". Coinbase Wallet is the
+  // archetypal case: the extension is installed in Chrome, but the
+  // `window.coinbaseSolana` global is only injected AFTER the user has
+  // signed into the Coinbase Wallet extension (a fingerprint-defense
+  // posture). Until they sign in, `CoinbaseWalletAdapter.readyState`
+  // stays NotDetected and the adapter looks identical to the
+  // "extension is missing" case.
+  //
+  // Surfacing these in a dedicated section unblocks the user with a
+  // sign-in-and-reload remediation instead of asking them to install
+  // an extension they already have. The same hint applies to any
+  // Solana wallet on Safari that injects after first paint, or to
+  // wallets whose extension is installed but currently locked.
+  const installedButNotDetected = useMemo(
+    () => wallets.filter((w) => w.readyState !== WalletReadyState.Installed),
+    [wallets],
+  );
+
   // Close on Escape — keyboard accessibility expectation for any modal.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -339,6 +359,70 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
                       Detected
                     </span>
                   </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {installedButNotDetected.length > 0 && (
+          // Third state for wallets that Meridian supports but the Wallet
+          // Standard reports as NotDetected. The most common cause is
+          // "extension is installed but the user hasn't signed in to it
+          // yet" — Coinbase Wallet is the canonical example because its
+          // `window.coinbaseSolana` global is only injected AFTER sign-in
+          // (a fingerprint-defense posture). Surfacing this section
+          // separately means a user with Coinbase Wallet installed but
+          // locked sees a clear "sign in to the extension and reload"
+          // remediation, instead of being told to install something they
+          // already have.
+          //
+          // The wallet name + icon still render so the user recognizes the
+          // wallet they expect to use; the row is non-clickable (no
+          // connect button) because attempting to connect against a
+          // NotDetected adapter throws WalletNotReadyError, which is the
+          // exact path users were getting stuck on before this fix.
+          <section className="mb-5">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">
+              Already installed but not detected?
+            </p>
+            <p className="mb-3 rounded-lg border border-accent/30 bg-accent/10 p-3 text-xs text-text">
+              <span className="font-semibold">Sign in to the extension first.</span>{" "}
+              Some wallets — especially{" "}
+              <span className="font-semibold">Coinbase Wallet</span> — only inject themselves into
+              this page AFTER you have signed in / unlocked the extension. Click the wallet&apos;s
+              extension icon in your browser toolbar, sign in or unlock, then reload this page.
+              The wallet will then move up to the Detected section above and become clickable.
+            </p>
+            <ul className="space-y-2">
+              {installedButNotDetected.map((w) => (
+                <li
+                  key={w.adapter.name}
+                  className="flex w-full items-center gap-3 rounded-xl border border-panel bg-panel/20 px-4 py-3 text-left text-muted"
+                  title={
+                    `${w.adapter.name} is not detected on this page. ` +
+                    `Open the ${w.adapter.name} extension, sign in / unlock if needed, ` +
+                    `then reload Meridian to make it clickable here.`
+                  }
+                >
+                  {w.adapter.icon ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={w.adapter.icon}
+                      alt=""
+                      className="h-7 w-7 rounded opacity-60"
+                      width={28}
+                      height={28}
+                    />
+                  ) : (
+                    <span className="grid h-7 w-7 place-items-center rounded bg-panel text-xs font-bold text-muted opacity-60">
+                      {w.adapter.name[0]}
+                    </span>
+                  )}
+                  <span className="font-medium">{w.adapter.name}</span>
+                  <span className="ml-auto rounded-full border border-panel bg-panel/40 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                    sign in to detect
+                  </span>
                 </li>
               ))}
             </ul>
