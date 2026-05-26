@@ -128,6 +128,11 @@ const INSTALL_OPTIONS: readonly WalletInstallOption[] = [
       "Most popular wallet. You must create a wallet inside the extension BEFORE clicking connect here.",
   },
   {
+    name: "Coinbase",
+    blurb:
+      "Coinbase Wallet (Chromium-only extension). Sign in with an existing Coinbase Wallet, or create one inside the extension before connecting.",
+  },
+  {
     name: "Backpack",
     blurb: "Newer wallet. Supports xNFTs.",
   },

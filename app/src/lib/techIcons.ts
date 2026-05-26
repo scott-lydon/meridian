@@ -108,6 +108,17 @@ export const TECH_ICONS: Record<string, TechIcon> = {
     color: "FC8D1B",
     dataUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHJlY3Qgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByeD0iNSIgZmlsbD0iI0ZDOEQxQiIvPjx0ZXh0IHg9IjEyIiB5PSIxNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSI3MDAiIGZvbnQtc2l6ZT0iMTQiIGZpbGw9IiNmZmYiPlM8L3RleHQ+PC9zdmc+",
   },
+  // Coinbase Wallet mark. Coinbase brand blue (#0052FF) circle with the
+  // white inset square (Coinbase symbol). Drawn at 24x24 to match the
+  // surrounding tech-stack icons. Inlined as a data URL so it ships with
+  // the JS bundle and never hits a third-party CDN — same reasoning as
+  // the other entries in this file. The 1024-viewBox version of the same
+  // mark is used at install-row scale in `WalletBrandIcon.tsx`.
+  "coinbase": {
+    slug: "coinbase",
+    color: "0052FF",
+    dataUrl: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiMwMDUyRkYiLz48cmVjdCB4PSI4LjUiIHk9IjguNSIgd2lkdGg9IjciIGhlaWdodD0iNyIgcng9IjEuMiIgZmlsbD0iI2ZmZmZmZiIvPjwvc3ZnPg==",
+  },
   "anchor": {
     slug: "anchor",
     color: "512BD4",

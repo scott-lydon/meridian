@@ -40,10 +40,12 @@ import {
 
 const PHANTOM_HELP_URL = "https://help.phantom.com/hc/en-us/articles/4406393831187-How-do-I-change-my-network";
 const SOLFLARE_HELP_URL = "https://docs.solflare.com/solflare/account-management/changing-networks";
+const COINBASE_HELP_URL = "https://help.coinbase.com/en/wallet/managing-account/coinbase-wallet-supported-networks-and-assets";
 const PHANTOM_DOWNLOAD_URL = "https://phantom.com/download";
 const SOLFLARE_DOWNLOAD_URL = "https://solflare.com/download";
+const COINBASE_DOWNLOAD_URL = "https://www.coinbase.com/wallet/downloads";
 
-type WalletChoice = "solflare" | "phantom";
+type WalletChoice = "solflare" | "phantom" | "coinbase";
 
 function clusterCopy(name: string): { label: string; tone: "neutral" | "warn"; intro: string } {
   switch (name) {
@@ -158,6 +160,86 @@ function SolflareSteps({ browser }: { browser: DetectedBrowser }) {
         className="inline-block text-xs text-accent underline"
       >
         Solflare docs: changing networks →
+      </a>
+    </div>
+  );
+}
+
+function CoinbaseSteps({ browser }: { browser: DetectedBrowser }) {
+  // Coinbase Wallet panel — for users who already have Coinbase Wallet or
+  // who specifically want to use it. Two important differences from
+  // Phantom and Solflare:
+  //
+  //   1. Coinbase Wallet does NOT expose a per-network selector for Solana
+  //      the way Phantom does. The dApp's `Connection` (Meridian's
+  //      `cluster.rpcUrl`, currently devnet) is what dictates which Solana
+  //      cluster a signed transaction lands on; Coinbase Wallet signs
+  //      whatever Meridian builds. So there is no "switch the wallet to
+  //      devnet" step here — that step is a no-op for Coinbase Wallet.
+  //
+  //   2. To VIEW your devnet SOL balance INSIDE the Coinbase Wallet
+  //      extension (separate from Meridian's own balance display), you
+  //      have to enable Settings → Default Network → enable testnets, then
+  //      pick Solana Devnet. Meridian works regardless.
+  //
+  // Coinbase Wallet does not auto-create a wallet inside the connect
+  // popup the way Solflare does; if there is no Coinbase Wallet set up
+  // yet, the user has to create one inside the extension first (same
+  // shape as Phantom). If the user is brand new to crypto, Solflare is
+  // still the easier path; that's noted at the top.
+  return (
+    <div className="space-y-3">
+      <div className="rounded-md border border-accent/30 bg-accent/10 p-2.5 text-[11px] text-text">
+        <span className="font-semibold text-accent">Different from Phantom and Solflare:</span>{" "}
+        Coinbase Wallet has no per-cluster selector for Solana. Meridian's RPC
+        connection picks the cluster; Coinbase signs whatever Meridian builds.
+        That means there is no &quot;switch the wallet to devnet&quot; step for
+        Coinbase Wallet — just install, sign in, and click Connect.
+      </div>
+      <ol className="list-decimal space-y-2 pl-5 text-xs text-text">
+        <li>
+          <span className="font-semibold">Install Coinbase Wallet extension</span> if you
+          haven&apos;t:{" "}
+          <a
+            href={COINBASE_DOWNLOAD_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="text-accent underline"
+          >
+            coinbase.com/wallet/downloads
+          </a>
+          . Note: the extension is Chromium-only at this writing (Chrome, Brave,
+          Edge, Arc, Opera, Vivaldi). On Firefox or Safari, use a different wallet.
+          Then reload this page so the site can detect it.
+        </li>
+        <li>
+          <span className="font-semibold">Open Coinbase Wallet from your toolbar.</span>{" "}
+          <span className="text-muted">{findExtensionInstructions(browser, "Coinbase Wallet")}</span>
+        </li>
+        <li>
+          <span className="font-semibold">Create or import your wallet</span> from the popup
+          wizard, or sign in to an existing Coinbase Wallet. Save the seed phrase on paper —
+          never screenshot, never paste into cloud notes.
+        </li>
+        <li>
+          (Optional, for viewing your devnet SOL balance inside the extension)
+          Open the extension menu → <span className="font-semibold">Settings</span> →{" "}
+          <span className="font-semibold">Default Network</span>, enable testnets,
+          and pick <span className="font-semibold">Solana Devnet</span>. Meridian works
+          regardless of this setting; skip it if you only care about trading here.
+        </li>
+        <li>
+          Come back to this tab and click <span className="font-semibold">Select Wallet</span> →{" "}
+          Coinbase Wallet. Approve in the popup.
+        </li>
+      </ol>
+      <a
+        href={COINBASE_HELP_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-block text-xs text-accent underline"
+      >
+        Coinbase Wallet docs: supported networks →
       </a>
     </div>
   );
@@ -398,13 +480,32 @@ export function NetworkBadge() {
                 Phantom
               </span>
             </button>
+            <button
+              role="tab"
+              aria-selected={choice === "coinbase"}
+              onClick={() => setChoice("coinbase")}
+              className={
+                choice === "coinbase"
+                  ? "flex-1 rounded-md bg-accent/15 px-2 py-1.5 text-xs font-semibold text-accent"
+                  : "flex-1 rounded-md px-2 py-1.5 text-xs text-muted hover:text-text"
+              }
+            >
+              <span className="inline-flex items-center gap-1.5">
+                {/* Inline SVG via WalletBrandIcon — same rendering-path
+                    rationale as the sibling Solflare and Phantom tabs. */}
+                <WalletBrandIcon name="Coinbase" className="h-3.5 w-3.5" />
+                Coinbase
+              </span>
+            </button>
           </div>
 
           <div role="tabpanel">
             {choice === "solflare" ? (
               <SolflareSteps browser={browser} />
-            ) : (
+            ) : choice === "phantom" ? (
               <PhantomSteps browser={browser} />
+            ) : (
+              <CoinbaseSteps browser={browser} />
             )}
           </div>
 

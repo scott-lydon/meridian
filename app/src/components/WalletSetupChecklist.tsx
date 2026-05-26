@@ -32,17 +32,25 @@ interface DetectedWallet {
 }
 
 /**
- * Probe window.* for each wallet extension. Phantom, Solflare, and
- * Backpack all set a global synchronously when their content script runs,
- * so on a hydrated client these checks are reliable. We re-run on mount
- * because content-script injection can happen after the first paint on
- * slow extensions.
+ * Probe window.* for each wallet extension. Phantom, Solflare, Backpack,
+ * and Coinbase Wallet all set a global synchronously when their content
+ * script runs, so on a hydrated client these checks are reliable. We
+ * re-run on mount because content-script injection can happen after the
+ * first paint on slow extensions.
+ *
+ * Coinbase Wallet's Solana provider is injected at `window.coinbaseSolana`
+ * (the same global the official `CoinbaseWalletAdapter` polls — see
+ * node_modules/.../@solana/wallet-adapter-coinbase/lib/cjs/adapter.js,
+ * `scopePollingDetectionStrategy(() => window?.coinbaseSolana)`). Truthiness
+ * of that global is sufficient evidence that the extension is installed
+ * and the Solana provider is reachable; no `is*` flag exists for it.
  */
 function useDetectedWallets(): DetectedWallet[] {
   const [wallets, setWallets] = useState<DetectedWallet[]>([
     { name: "Phantom", installed: false },
     { name: "Solflare", installed: false },
     { name: "Backpack", installed: false },
+    { name: "Coinbase Wallet", installed: false },
   ]);
   useEffect(() => {
     const detect = () => {
@@ -50,11 +58,13 @@ function useDetectedWallets(): DetectedWallet[] {
         phantom?: { solana?: { isPhantom?: boolean } };
         solflare?: { isSolflare?: boolean };
         backpack?: { isBackpack?: boolean };
+        coinbaseSolana?: unknown;
       };
       setWallets([
         { name: "Phantom", installed: !!w.phantom?.solana?.isPhantom },
         { name: "Solflare", installed: !!w.solflare?.isSolflare },
         { name: "Backpack", installed: !!w.backpack?.isBackpack },
+        { name: "Coinbase Wallet", installed: !!w.coinbaseSolana },
       ]);
     };
     detect();
@@ -192,6 +202,15 @@ export function WalletSetupChecklist({
                   rel="noreferrer"
                 >
                   Backpack
+                </a>
+                , or{" "}
+                <a
+                  className="underline text-accent"
+                  href="https://www.coinbase.com/wallet/downloads"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Coinbase Wallet
                 </a>{" "}
                 and reload this page.
               </span>

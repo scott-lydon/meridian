@@ -283,10 +283,13 @@ function Eli7Card({ emoji, title, children }: { emoji: string; title: string; ch
 //   The diagram makes this explicit by putting the Next.js UI inside a
 //   "User's browser" subgraph (where it actually runs at runtime, even
 //   though it's served from Render) and labeling the Solana subgraph as
-//   the decentralized backend. The wallet node shows BOTH Phantom and
-//   Solflare icons because the WalletProvider uses Wallet Standard
-//   auto-discovery (empty `wallets` array), so any Wallet-Standard wallet
-//   appears in the modal automatically — Phantom is not special.
+//   the decentralized backend. The wallet node shows Phantom, Solflare,
+//   and Coinbase Wallet icons because the WalletProvider explicitly wires
+//   in all three adapters alongside Wallet Standard auto-discovery —
+//   Phantom and Solflare back Safari, and Coinbase Wallet does not
+//   publish a Wallet Standard handshake so it must be wired explicitly.
+//   Any other Wallet-Standard wallet (Backpack, Glow, etc.) still
+//   surfaces automatically via auto-discovery; Phantom is not special.
 //
 //   The previous version of this diagram labeled the wallet alone as
 //   "Client" and stuck Next.js in an "Off-chain" subgraph next to the
@@ -299,7 +302,7 @@ function Eli7Card({ emoji, title, children }: { emoji: string; title: string; ch
 const TOPOLOGY_MERMAID = `flowchart LR
   subgraph Browser["User's browser"]
     direction TB
-    Wallet["<img src='${techIconUrl("phantom")}' width='16'/> <img src='${techIconUrl("solflare")}' width='16'/> Phantom / Solflare<br/>(Wallet Standard)"]
+    Wallet["<img src='${techIconUrl("phantom")}' width='16'/> <img src='${techIconUrl("solflare")}' width='16'/> <img src='${techIconUrl("coinbase")}' width='16'/> Phantom / Solflare / Coinbase<br/>(Wallet Standard + explicit adapters)"]
     UI["<img src='${techIconUrl("nextdotjs")}' width='18'/> Next.js 14 UI<br/>(served from Render)"]
     Wallet -->|sign tx| UI
   end
@@ -338,8 +341,11 @@ function TopologySection() {
         clients, not the source of truth. The Next.js UI runs inside the user&apos;s browser
         (it&apos;s only <em>served</em> from Render). The keeper bot runs as a long-lived
         daemon and holds the admin keypair. Both talk to Solana directly, not to each other.
-        The wallet is multi-provider: Phantom, Solflare, or any Wallet-Standard wallet shows
-        up in the connect modal automatically.
+        The wallet is multi-provider: Phantom, Solflare, Coinbase Wallet, or any Wallet-Standard
+        wallet (Backpack, Glow, etc.) shows up in the connect modal. Phantom, Solflare, and
+        Coinbase Wallet are wired explicitly because two of them (Phantom on Safari, Coinbase
+        Wallet everywhere) do not publish the Wallet Standard handshake the auto-discovery code
+        path expects.
       </p>
       <div className="rounded-2xl border border-panel bg-panel/40 p-6">
         <pre className="mermaid text-sm">{TOPOLOGY_MERMAID}</pre>
@@ -405,7 +411,7 @@ const COMPONENTS: ComponentSpec[] = [
     iconColor: "ffffff",
     chain: "Off-chain (Render)",
     blurb:
-      "App Router on Render. Pages: landing, markets grid, trade page with order book, portfolio, history, audit, this page. TanStack Query for chain reads, wallet adapter for Phantom and Solflare. Branded UsdcBase bigint type for money.",
+      "App Router on Render. Pages: landing, markets grid, trade page with order book, portfolio, history, audit, this page. TanStack Query for chain reads, wallet adapter for Phantom, Solflare, and Coinbase Wallet (plus Wallet Standard auto-discovery for Backpack and others). Branded UsdcBase bigint type for money.",
     pros: [
       "Type-safe Anchor client generated from IDL",
       "Sub-2s order book polling",
@@ -617,7 +623,7 @@ const DECISIONS: DecisionRow[] = [
   { decision: "Oracle", chose: "Pyth (pull model)", alternative: "Switchboard", why: "First-class MAG7 equity feeds + confidence interval." },
   { decision: "USDC", chose: "Circle devnet mint", alternative: "Custom stable", why: "Real mint mirrors mainnet semantics." },
   { decision: "Token standard", chose: "SPL Token", alternative: "Token-2022", why: "No transfer hooks needed in v1." },
-  { decision: "Wallet", chose: "@solana/wallet-adapter", alternative: "Per-wallet integration", why: "Standard; Phantom + Solflare + Backpack out of the box." },
+  { decision: "Wallet", chose: "@solana/wallet-adapter w/ explicit Phantom + Solflare + Coinbase adapters", alternative: "Per-wallet integration or Wallet Standard auto-discovery alone", why: "Standard. Explicit Phantom + Solflare back Safari (no synchronous handshake there). Explicit Coinbase Wallet because it does not publish a Wallet Standard handshake at all; users coming from Coinbase get a path that does not require installing a second wallet just for Meridian." },
   { decision: "Frontend", chose: "Next.js 14 App Router", alternative: "Vite + React Router", why: "SSR landing, client trading, Render ergonomics." },
   { decision: "Server state", chose: "TanStack Query", alternative: "Apollo / SWR", why: "Best cache invalidation by key." },
   { decision: "UI state", chose: "Zustand", alternative: "Redux / Jotai", why: "No allocation in selectors (avoids React error #185)." },
@@ -1035,7 +1041,7 @@ const GLOSSARY: GlossaryEntry[] = [
   {
     term: "Wallet",
     definition:
-      "A browser extension or app that holds your Solana private keys and signs transactions. Meridian works with Phantom, Solflare, and any wallet that implements the Solana Wallet Standard.",
+      "A browser extension or app that holds your Solana private keys and signs transactions. Meridian works with Phantom, Solflare, Coinbase Wallet, and any wallet that implements the Solana Wallet Standard (Backpack, Glow, etc.).",
   },
 ];
 

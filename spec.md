@@ -27,7 +27,7 @@ Format: `As a <role>, I want <capability>, so that <outcome>.` Each story carrie
 
 ### US-1: Connect wallet and see balance
 
-**As a** retail trader, **I want** to connect Phantom or Solflare and see my USDC balance, **so that** I know what I have to trade with.
+**As a** retail trader, **I want** to connect Phantom, Solflare, or Coinbase Wallet and see my USDC balance, **so that** I know what I have to trade with.
 
 Acceptance:
 - Given the user lands on the published URL with no wallet connected

@@ -50,6 +50,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import {
   PhantomWalletAdapter,
   SolflareWalletAdapter,
+  CoinbaseWalletAdapter,
 } from "@solana/wallet-adapter-wallets";
 
 import { cluster } from "@/lib/cluster";
@@ -72,7 +73,7 @@ const WATCHER_TIMEOUT_MS = 4_000;
  */
 function describeWalletError(err: unknown): string {
   if (err instanceof WalletNotReadyError) {
-    return "Phantom (or Solflare) is not installed or not unlocked. Open the extension, unlock it, then click connect again. If the extension is missing, install it from phantom.com or solflare.com and reload this page.";
+    return "Phantom, Solflare, or Coinbase Wallet is not installed or not unlocked. Open the extension, unlock it, then click connect again. If the extension is missing, install it from phantom.com, solflare.com, or wallet.coinbase.com and reload this page.";
   }
   if (err instanceof WalletWindowBlockedError) {
     return "The browser blocked the wallet popup. Allow popups for this site in the address bar, then click connect again.";
@@ -187,7 +188,8 @@ function WalletWatcher({ onTimeout }: { onTimeout: (message: string) => void }) 
 }
 
 export function MeridianProviders({ children }: { readonly children: ReactNode }) {
-  // Belt-AND-suspenders wallet discovery (2026-05-25 Safari fix).
+  // Belt-AND-suspenders wallet discovery (2026-05-25 Safari fix; extended
+  // 2026-05-25 to include Coinbase Wallet).
   //
   // The previous setup was `wallets={[]}` and relied entirely on the Solana
   // Wallet Standard to auto-discover registered wallets. That works on
@@ -200,21 +202,37 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
   // .Installed`, so Safari users saw an empty Detected section and were
   // told to install a wallet they already had installed.
   //
-  // The fix: include the explicit `PhantomWalletAdapter` and
-  // `SolflareWalletAdapter` alongside whatever Wallet Standard discovers.
-  // Each adapter probes its own injected global (e.g. PhantomWalletAdapter
-  // checks `window.phantom?.solana?.isPhantom` and SolflareWalletAdapter
-  // checks `window.solflare?.isSolflare`) and flips its `readyState` to
-  // `Installed` independently of the Wallet Standard handshake. The picker
-  // de-duplicates by adapter `name`, so on Chromium where Wallet Standard
-  // ALSO surfaces them you still see exactly one Phantom row, not two.
+  // The fix: include the explicit `PhantomWalletAdapter`,
+  // `SolflareWalletAdapter`, and `CoinbaseWalletAdapter` alongside whatever
+  // Wallet Standard discovers. Each adapter probes its own injected global
+  // (PhantomWalletAdapter checks `window.phantom?.solana?.isPhantom`,
+  // SolflareWalletAdapter checks `window.solflare?.isSolflare`, and
+  // CoinbaseWalletAdapter checks `window.coinbaseSolana` — see
+  // node_modules/.../@solana/wallet-adapter-coinbase/lib/cjs/adapter.js) and
+  // flips its `readyState` to `Installed` independently of the Wallet
+  // Standard handshake. The picker de-duplicates by adapter `name`, so on
+  // Chromium where Wallet Standard ALSO surfaces them you still see exactly
+  // one Phantom row, not two.
   //
   // The historical concern that prompted the empty-wallets approach
   // ("Phantom v23 removed window.solana") was specific to the old
   // `window.solana` global; the v0.9.29 PhantomWalletAdapter targets
   // `window.phantom.solana` and is not affected.
+  //
+  // Coinbase Wallet note: the Coinbase Wallet browser extension supports
+  // Solana sign + send via the standard wallet-adapter interface. Meridian's
+  // `Connection` is what dictates the cluster (devnet); Coinbase Wallet
+  // signs whatever transaction Meridian builds against that endpoint, so
+  // there is no per-network setting inside the extension that gates this.
+  // (Coinbase Wallet's UI does have a Settings → Developer Settings →
+  // Testnets toggle, but that only affects what balances the wallet's
+  // own asset list shows; it does not gate dApp signing.)
   const wallets = useMemo(
-    () => [new PhantomWalletAdapter(), new SolflareWalletAdapter()],
+    () => [
+      new PhantomWalletAdapter(),
+      new SolflareWalletAdapter(),
+      new CoinbaseWalletAdapter(),
+    ],
     [],
   );
 

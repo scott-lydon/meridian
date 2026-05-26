@@ -70,6 +70,13 @@ export function findExtensionInstructions(
     case "edge":
       return `In Edge, extension icons aren't pinned by default. Click the puzzle-piece icon in the top-right of the Edge window, pick ${extensionName} to open it. To pin: click the eye icon next to ${extensionName} in the extensions menu, then choose "Show in toolbar".`;
     case "firefox":
+      // Coinbase Wallet's browser extension is Chromium-only at this
+      // writing — there is no Firefox build. Steer Coinbase users to a
+      // Chromium browser instead of telling them to enable an add-on
+      // that does not exist.
+      if (extensionName.toLowerCase().includes("coinbase")) {
+        return `Coinbase Wallet does not ship a Firefox extension. For Coinbase Wallet, use Chrome, Brave, or Edge. Or pick Phantom / Solflare here — both do work on Firefox.`;
+      }
       return `In Firefox, extension icons usually appear in the toolbar automatically. If you don't see ${extensionName}, click the hamburger menu (three lines, top-right) → "Add-ons and themes" → "Extensions" and make sure ${extensionName} is enabled.`;
     case "safari":
       // Updated 2026-05-25: Phantom ships a real Safari WebExtension
@@ -79,8 +86,9 @@ export function findExtensionInstructions(
       // PhantomWalletAdapter detects it the same way it does on Chromium.
       // Solflare's Safari extension is in beta and detection is less
       // reliable; we still steer Solflare users toward a Chromium browser.
+      // Coinbase Wallet has no Safari desktop extension either; same path.
       return extensionName.toLowerCase() === "phantom"
-        ? `On Safari (macOS), install Phantom for Safari from the Mac App Store, then enable the extension under Safari → Settings → Extensions and allow it on this site. After enabling, reload this page. Phantom's Safari extension is the only Solana wallet extension currently shipped for Safari; Solflare and Backpack are Chromium-only.`
+        ? `On Safari (macOS), install Phantom for Safari from the Mac App Store, then enable the extension under Safari → Settings → Extensions and allow it on this site. After enabling, reload this page. Phantom's Safari extension is the only Solana wallet extension currently shipped for Safari; Solflare, Backpack, and Coinbase Wallet are Chromium-only.`
         : `${extensionName} does not ship a Safari extension. For ${extensionName}, use Chrome, Brave, Edge, or Firefox. Phantom is the one Solana wallet that does support Safari (Mac App Store).`;
     case "unknown":
       return `If you don't see the ${extensionName} icon in your toolbar, look for an "Extensions" menu in your browser's toolbar (usually top-right, often a puzzle-piece icon) and select ${extensionName} from the list.`;

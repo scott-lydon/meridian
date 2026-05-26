@@ -44,7 +44,7 @@
 
 import type { JSX } from "react";
 
-export type WalletBrand = "Phantom" | "Solflare" | "Backpack";
+export type WalletBrand = "Phantom" | "Solflare" | "Backpack" | "Coinbase";
 
 interface WalletBrandIconProps {
   name: WalletBrand;
@@ -154,6 +154,34 @@ export function WalletBrandIcon({
             >
               B
             </text>
+          </svg>
+        </span>
+      );
+
+    case "Coinbase":
+      // Source: @solana/wallet-adapter-coinbase adapter.js — the canonical
+      // mark shipped with the wallet adapter. Coinbase brand blue (#0052FF)
+      // disc with a white inset square (the "Coinbase symbol"). The original
+      // ships as a base64 data URL inside the adapter; rendered here as
+      // inline JSX so it follows the same rendering path as the Phantom and
+      // Solflare marks (no data-URL pipeline that 2026-05-24 user reports
+      // showed silently broken in Safari + Chrome).
+      return (
+        <span className={wrapperClass} aria-hidden="true">
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 1024 1024"
+            width="100%"
+            height="100%"
+            fill="none"
+          >
+            <circle cx="512" cy="512" r="512" fill="#0052FF" />
+            <path
+              fillRule="evenodd"
+              clipRule="evenodd"
+              d="M152 512C152 710.823 313.177 872 512 872C710.823 872 872 710.823 872 512C872 313.177 710.823 152 512 152C313.177 152 152 313.177 152 512ZM420 396C406.745 396 396 406.745 396 420V604C396 617.255 406.745 628 420 628H604C617.255 628 628 617.255 628 604V420C628 406.745 617.255 396 604 396H420Z"
+              fill="white"
+            />
           </svg>
         </span>
       );

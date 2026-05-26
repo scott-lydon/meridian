@@ -8,15 +8,17 @@ The backend is a Solana program (Anchor 0.31.1) deployed on Solana devnet.
 Two off-chain Render services support it: a Next.js UI (the product surface)
 and a Node automation keeper. Both are clients of the program; neither holds
 business logic or user funds. The UI talks to Solana directly; it does NOT
-route through the keeper. Phantom or Solflare (any Wallet Standard wallet)
-signs transactions inside the user's browser.
+route through the keeper. Phantom, Solflare, Backpack, or Coinbase Wallet
+(any Wallet Standard wallet, plus Coinbase Wallet which is auto-wired even
+though it does not publish the Wallet Standard handshake) signs transactions
+inside the user's browser.
 
 ```
 ┌─────────────────────── User's browser ─────────────────────────┐
 │                                                                │
 │   ┌──────────────────────────┐    ┌──────────────────────────┐ │
-│   │ Phantom or Solflare      │ ──►│ Next.js 14 UI            │ │
-│   │ (Wallet Standard)        │ ⏎ sign tx                     │ │
+│   │ Phantom / Solflare /     │ ──►│ Next.js 14 UI            │ │
+│   │ Backpack / Coinbase      │ ⏎ sign tx                     │ │
 │   │ non-custodial            │    │ served from Render        │ │
 │   └──────────────────────────┘    │ - landing                 │ │
 │                                   │ - /markets, /trade        │ │
@@ -71,11 +73,19 @@ signs transactions inside the user's browser.
   executes on the Solana validator network. We retain the upgrade authority
   (we have not transferred or burned it), so the program is *not* upgrade-
   immutable. Mainnet promotion would burn the upgrade authority.
-- Wallet support is multi-provider via the Solana Wallet Standard. Phantom,
-  Solflare, and Backpack all register themselves and appear in the connect
-  modal automatically. The wallet adapter is configured with an empty
-  `wallets` array on purpose. See
-  [`app/src/components/WalletProvider.tsx`](./app/src/components/WalletProvider.tsx).
+- Wallet support is multi-provider. Phantom, Solflare, and Backpack register
+  themselves via the Solana Wallet Standard and appear in the connect modal
+  automatically. Coinbase Wallet does not publish a Wallet Standard handshake,
+  so its adapter (`CoinbaseWalletAdapter`, which polls `window.coinbaseSolana`)
+  is wired in explicitly alongside the explicit Phantom and Solflare adapters
+  that backstop Safari. The picker de-duplicates by adapter `name`, so Wallet
+  Standard plus explicit adapters never produce duplicate rows. The Connection
+  (devnet) is dictated by Meridian, not by the wallet, so a Coinbase Wallet
+  user does not need to switch any per-network setting inside their extension
+  to use Meridian. See
+  [`app/src/components/WalletProvider.tsx`](./app/src/components/WalletProvider.tsx)
+  and
+  [`app/src/components/WalletPickerProvider.tsx`](./app/src/components/WalletPickerProvider.tsx).
 
 ## Components
 
@@ -353,7 +363,7 @@ These are ergonomic costs, not pricing-power costs. A NO holder negotiates price
 
 ### What "the user signs" means, end to end
 
-Every state-changing call into the program requires a wallet signature. In `buy_no.rs` (and every other instruction), the Accounts struct declares `pub user: Signer<'info>`, which Anchor compiles to a runtime check that the transaction carries a valid signature from the account passed as `user`. In the UI this corresponds to the wallet popup ("Meridian · buy_no · Approve / Reject"): the user's browser wallet (Phantom, Solflare, Backpack via the Solana Wallet Standard) cryptographically signs the transaction bytes with the user's private key, then submits to a Solana validator. There is no daemon and no privileged service that signs on the user's behalf. The cranker (`match_orders`) is permissionless and signs only as itself, and it never mints anything; it only crosses an already-resting YES bid against an already-resting YES ask.
+Every state-changing call into the program requires a wallet signature. In `buy_no.rs` (and every other instruction), the Accounts struct declares `pub user: Signer<'info>`, which Anchor compiles to a runtime check that the transaction carries a valid signature from the account passed as `user`. In the UI this corresponds to the wallet popup ("Meridian · buy_no · Approve / Reject"): the user's browser wallet (Phantom, Solflare, Backpack via the Solana Wallet Standard; Coinbase Wallet via the explicitly-registered `CoinbaseWalletAdapter` that polls `window.coinbaseSolana`) cryptographically signs the transaction bytes with the user's private key, then submits to a Solana validator. There is no daemon and no privileged service that signs on the user's behalf. The cranker (`match_orders`) is permissionless and signs only as itself, and it never mints anything; it only crosses an already-resting YES bid against an already-resting YES ask.
 
 ## Decisions table
 
@@ -367,7 +377,7 @@ Mirrors [`plan.md`](./plan.md) §4 verbatim. Single source of truth for the webs
 | 4 | Oracle | Pyth Network (pull) | Switchboard | First-class MAG7 equity feeds, confidence intervals, pull model lets us post a fresh price at settle time. |
 | 5 | USDC | Circle devnet mint | Custom stable | Real mint matches mainnet semantics. |
 | 6 | Token standard | SPL Token | Token-2022 | No transfer-hook need in v1. |
-| 7 | Wallet adapter | `@solana/wallet-adapter` | Single-wallet | Standard, supports Phantom + Solflare + Backpack. |
+| 7 | Wallet adapter | `@solana/wallet-adapter` with explicit Phantom + Solflare + Coinbase Wallet adapters (Backpack auto-discovered) | Single-wallet | Standard. Explicit Phantom + Solflare back the Wallet Standard handshake on Safari (where the handshake is not published synchronously). Coinbase Wallet is added because it does not publish a Wallet Standard handshake at all. |
 | 8 | Frontend | Next.js 14 App Router on Render | Vite + React Router | SSR for landing; client for trading. One Render platform for both services. |
 | 9 | Server state | TanStack Query | Apollo / SWR | Best cache-invalidation primitives for chain reads. |
 | 10 | Client state | Zustand | Redux / Jotai | Existing standard from boxy-fractions; selectors must not allocate. |

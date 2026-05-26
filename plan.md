@@ -11,10 +11,11 @@ The plan optimizes against `spec.md`'s user stories under the constraints in `co
 ## 1. System topology
 
 ```
-                           ┌───────────────────────────┐
-                           │   User wallet (Phantom)   │
-                           │   non-custodial, signs    │
-                           └─────────────┬─────────────┘
+                           ┌───────────────────────────────────────────┐
+                           │   User wallet (Phantom / Solflare /       │
+                           │   Backpack / Coinbase Wallet)             │
+                           │   non-custodial, signs                    │
+                           └───────────────────┬───────────────────────┘
                                          │ tx + sigs
                                          ▼
 ┌────────────────────────────────────────────────────────────────────────┐
@@ -126,7 +127,7 @@ Every PDA includes a 1-byte program version in its seeds so a future v2 deployme
 - **UI state:** Zustand. One store per page, sliced per concern (selected strike, order form draft, etc.). Selectors never allocate (see constitution §5 and the boxy-fractions lesson).
 - **No Redux.** Adds boilerplate without paying off at our scale.
 
-**Wallet adapter.** `@solana/wallet-adapter-react` with Phantom, Solflare, and Backpack. Provider lives at the root layout. The "Connect Wallet" button is a thin wrapper around the adapter's modal.
+**Wallet adapter.** `@solana/wallet-adapter-react` with explicit adapters for Phantom, Solflare, and Coinbase Wallet (Backpack is surfaced through the Wallet Standard auto-discovery). Provider lives at the root layout. Meridian replaces the default `wallet-adapter-react-ui` modal with `WalletPickerProvider`, which lists detected wallets (via `WalletReadyState.Installed`) and provides browser-aware install links plus a five-step Devnet setup checklist when none are detected. Coinbase Wallet integrates through `CoinbaseWalletAdapter` (probes `window.coinbaseSolana`); the Anchor / Connection cluster (devnet) is dictated by Meridian, so the wallet only signs and there is no per-network selector for it to mismatch on.
 
 **Anchor client.** Generated TS types from the program IDL on every build (`anchor build && anchor idl parse`). The client is wrapped in a `useMeridian()` hook that returns typed instruction builders. No `as any`, no untyped argument lists.
 
@@ -309,7 +310,7 @@ Every architectural decision, the alternative considered, and why. This table is
 | 4 | Oracle | Pyth Network (pull model) | Switchboard | Pyth has first-class MAG7 equity feeds on devnet, first-class confidence intervals, and a pull model that lets us post a fresh price at settlement time. Switchboard's equity coverage is less mature. |
 | 5 | USDC | Circle devnet USDC | Custom stable mint | Use the real Circle devnet USDC mint so the demo matches mainnet semantics exactly. No bespoke token. |
 | 6 | Token standard | SPL Token (not Token-2022) | Token-2022 with transfer hooks | Token-2022 transfer hooks introduce a CPI on every transfer, which inflates the matching tx's CU usage. We do not need confidential transfers or transfer fees in v1. Revisit if v2 needs them. |
-| 7 | Wallet adapter | `@solana/wallet-adapter-react` with Phantom + Solflare + Backpack | Single-wallet integration | The adapter is the standard, supports all major Solana wallets out of the box, and is the path the user is most likely to already have installed. |
+| 7 | Wallet adapter | `@solana/wallet-adapter-react` with explicit `PhantomWalletAdapter`, `SolflareWalletAdapter`, `CoinbaseWalletAdapter` (+ Wallet Standard auto-discovery for Backpack et al.) | Single-wallet integration | The wallet-adapter package is the standard. Carrying explicit adapters alongside Wallet Standard auto-discovery is required because Safari's Phantom WebExtension and Coinbase Wallet do not publish the Wallet Standard handshake synchronously; the picker's "Detected" filter would otherwise be empty for users who actually have a wallet installed. Coinbase Wallet was added so users coming from Coinbase have a path that does not require installing a second wallet just for Meridian; the cluster (devnet) is dictated by Meridian's `Connection`, not the wallet, so there is no per-network mismatch path. |
 | 8 | Frontend framework | Next.js 14 App Router | Vite + React Router | Next.js gives us SSR for the marketing landing (faster first paint, better social previews) while keeping the rest client-rendered. Vercel's deploy ergonomics are best-in-class. |
 | 9 | Server-state library | TanStack Query | Apollo / SWR / hand-rolled | TanStack Query has the best primitives for cache invalidation by query key, which we need when chain state updates per account. Apollo is overkill (no GraphQL). SWR is fine; TanStack is the project's existing standard. |
 | 10 | Client-state library | Zustand | Redux Toolkit / Jotai | Zustand is the user's existing standard from boxy-fractions. Redux is forbidden in v1 by the constitution. Jotai is fine but smaller ecosystem. |

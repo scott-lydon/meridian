@@ -110,10 +110,27 @@ const BACKPACK_LINKS: WalletInstallLink = {
   fallback: "https://backpack.app/download",
 };
 
+// Coinbase Wallet extension. Chrome Web Store ID
+// `hnfanknocfeofbddgcijnmhnfnkdnaad` is the same one the official
+// CoinbaseWalletAdapter ships in its `url` field (see
+// node_modules/.../@solana/wallet-adapter-coinbase/lib/cjs/adapter.js).
+// It is a Chromium-only extension at this writing — no Firefox build, no
+// Safari build. Firefox / Safari / unknown fall back to wallet.coinbase.com
+// which explains the limitation and offers the mobile-app path. Solana
+// support inside Coinbase Wallet is shipped under the same extension; no
+// separate "Coinbase Wallet for Solana" install exists.
+const COINBASE_LINKS: WalletInstallLink = {
+  chromium:
+    "https://chromewebstore.google.com/detail/coinbase-wallet-extension/hnfanknocfeofbddgcijnmhnfnkdnaad",
+  firefox: "https://www.coinbase.com/wallet/downloads",
+  fallback: "https://www.coinbase.com/wallet/downloads",
+};
+
 const LINKS_BY_WALLET = {
   Phantom: PHANTOM_LINKS,
   Solflare: SOLFLARE_LINKS,
   Backpack: BACKPACK_LINKS,
+  Coinbase: COINBASE_LINKS,
 } as const;
 
 export type SupportedInstallWalletName = keyof typeof LINKS_BY_WALLET;
