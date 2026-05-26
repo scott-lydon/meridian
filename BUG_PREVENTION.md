@@ -148,4 +148,55 @@ section and grep-asserts the invariant on every invocation.
 
 ---
 
-## 4. (template — add as we find them)
+## 4. buy_no / sell_no must reject self-matching at the program layer
+
+**Symptom seen 2026-05-26:** user clicked Buy No on the AAPL market when
+the best YES bid in the book was their OWN $0.50 bid. The toast said
+"+1 NO (paid ~$0.50 each)" and the transaction confirmed. Their actual
+holdings went to 1 YES + 1 NO, not 0 YES + 1 NO. USDC went down by
+$0.50 as expected. The user was correctly confused.
+
+**Cause:** `programs/meridian/src/instructions/buy_no.rs:236-247` does
+the atomic `mint_pair + IOC-sell-YES` flow by transferring the
+freshly-minted YES from `user_yes` to `bid_maker_yes`. If the best bid
+was placed by the caller, the caller's frontend passes the caller's own
+YES ATA as `bid_maker_yes` (correctly — the bid owner IS the caller),
+and the SPL `Transfer` then becomes a same-ATA no-op. The mint-pair leg
+still mints both halves to the caller, and the `usdc_escrow` refund leg
+still returns the caller's own escrowed USDC to them. Net: +1 YES + 1 NO,
+-(1.00 - bid_price) USDC. The "sell" never happened in any economically
+meaningful sense. The same class bug exists symmetrically in
+`programs/meridian/src/instructions/sell_no.rs` against own asks.
+
+**Fix landed in commit <pending>:** added
+`MeridianError::SelfMatchingForbidden` and checks in both `buy_no` and
+`sell_no` handlers that reject when the best counterparty's `owner`
+equals `ctx.accounts.user.key()`. The on-chain check is the
+load-bearing one. The frontend trade page (`page.tsx`) ALSO computes
+`bestBidIsSelf` and `bestAskIsSelf` and disables the Buy No / Sell No
+buttons with a tooltip that says "Best bid is your own order — Buy No
+would self-cross. Cancel your own bid first." Either alone would close
+the failure mode for honest UIs, but an adversarial frontend could
+bypass the client check, so the program-layer reject is the canonical
+fix.
+
+**Test invariant for every new IOC-take instruction:** if the
+instruction reads a top-of-book counterparty and transfers tokens to or
+from it, it MUST reject when `counterparty.owner == ctx.accounts.user.key()`.
+The grep that catches the missing check is:
+`grep -nE 'best_bid|best_ask|bids\[0\]|asks\[0\]' programs/meridian/src/instructions/*.rs`
+followed by a manual scan for the self-match guard. The qa-adversary
+playbook should include this as a fixed-action question on every IOC
+instruction it discovers.
+
+**On-chain recovery for users who got caught by this before the fix
+shipped:** they hold one extra YES (or NO) than they should. The
+cleanest path is `Redeem 1 pair` (the now-working button shipped in
+commit 24d1568) which burns one of each and returns $1.00 USDC, then
+the user can re-attempt the buy on a different counterparty's order.
+On an illiquid devnet market this may mean waiting for the order-book
+seeder cron to repopulate; see `automation/src/jobs/ensureOrderBook.ts`.
+
+---
+
+## 5. (template — add as we find them)

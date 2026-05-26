@@ -97,4 +97,16 @@ pub enum MeridianError {
 
     #[msg("Pyth publish_time is in the future relative to on-chain clock — likely cranker clock skew")]
     OraclePriceFromFuture,
+
+    // === Self-matching protection (slice "buy_no/sell_no self-cross fix" 2026-05-26) ===
+    //
+    // buy_no and sell_no are atomic mint-pair + IOC-sell-YES (or IOC-buy-YES + redeem-pair)
+    // against the BEST counterparty in the order book. If the best counterparty is the caller
+    // themselves, the on-chain transfers become same-ATA no-ops and the user ends up with
+    // BOTH halves of a pair when they only wanted ONE side. This is the failure mode that
+    // produced the 2026-05-26 user report "I bought a NO but I still have a YES too." Reject
+    // explicitly so the caller's frontend can either cancel the conflicting order first or
+    // wait for someone else to seed the book.
+    #[msg("Best counterparty in the book is the caller — would self-cross. Cancel your own order first, or use Mint Pair / Redeem Pair if you actually want both halves.")]
+    SelfMatchingForbidden,
 }

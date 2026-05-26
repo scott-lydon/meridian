@@ -179,6 +179,24 @@ pub fn handler(
             );
             return err!(MeridianError::OrderNotFound);
         }
+        // Self-matching protection. If the best bid was placed by the caller,
+        // the SPL Transfer at step 2 becomes user_yes -> user_yes (same ATA),
+        // which is a no-op. The mint_pair leg still gives the caller 1 YES + 1 NO
+        // and the usdc_escrow refund still returns the caller's own escrowed
+        // USDC, so the caller ends up holding BOTH halves of the pair while
+        // having only paid the (1.00 - bid_price) net difference. The 2026-05-26
+        // user report — "I tapped Buy No but I still have a YES" — is exactly
+        // this. Reject so the frontend can either disable the button or prompt
+        // a cancel_order first. The frontend ALSO disables the button when
+        // best_bid.owner == publicKey for the same reason, but this on-chain
+        // check is the load-bearing one; the UI hint is convenience.
+        if bid.owner == ctx.accounts.user.key() {
+            msg!(
+                "SelfMatchingForbidden: best_bid.owner={} == caller — would self-cross. Cancel your own bid first.",
+                bid.owner
+            );
+            return err!(MeridianError::SelfMatchingForbidden);
+        }
         (bid.price_ticks, bid.owner)
     };
 

@@ -175,6 +175,20 @@ pub fn handler(
             );
             return err!(MeridianError::OrderNotFound);
         }
+        // Self-matching protection (sell_no side). If the best ask was placed
+        // by the caller, the USDC transfer at step 1 becomes
+        // user_usdc -> user_usdc (same ATA), a no-op, while yes_escrow still
+        // releases YES to the caller and the burn + vault payout still proceed.
+        // The caller ends up effectively redeeming their own ask's escrowed
+        // YES at par while gaining nothing in exchange. Same self-cross class
+        // as the buy_no bug fixed in this commit; reject symmetrically.
+        if ask.owner == ctx.accounts.user.key() {
+            msg!(
+                "SelfMatchingForbidden: best_ask.owner={} == caller — would self-cross. Cancel your own ask first.",
+                ask.owner
+            );
+            return err!(MeridianError::SelfMatchingForbidden);
+        }
         (ask.price_ticks, ask.owner)
     };
 

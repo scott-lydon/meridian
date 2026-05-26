@@ -1553,6 +1553,11 @@ export type Meridian = {
       "code": 6026,
       "name": "oraclePriceFromFuture",
       "msg": "Pyth publish_time is in the future relative to on-chain clock — likely cranker clock skew"
+    },
+    {
+      "code": 6027,
+      "name": "selfMatchingForbidden",
+      "msg": "Best counterparty in the book is the caller — would self-cross. Cancel your own order first, or use Mint Pair / Redeem Pair if you actually want both halves."
     }
   ],
   "types": [

@@ -429,6 +429,19 @@ export default function TradePage({
 
   const bestBid = book?.bids[0];
   const bestAsk = book?.asks[0];
+  // Self-matching guards. buy_no / sell_no are atomic mint-pair + IOC-sell
+  // (or IOC-buy + redeem-pair) against the BEST counterparty. If the best
+  // counterparty is the caller themselves, the SPL transfers become same-ATA
+  // no-ops and the caller ends up holding BOTH halves of a pair when they
+  // only wanted ONE side. The on-chain program rejects this since the
+  // SelfMatchingForbidden patch on 2026-05-26, but disabling the buttons
+  // client-side spares the user a wasted signature and a confusing toast
+  // when the issue is plainly visible from the book.
+  // `bestBidIsSelf` / `bestAskIsSelf` are `null` when there's no counterparty
+  // OR the wallet isn't connected, so the disabled-condition truthy check
+  // below stays correct for both states without extra branches.
+  const bestBidIsSelf = bestBid && publicKey ? bestBid.owner === publicKey.toBase58() : false;
+  const bestAskIsSelf = bestAsk && publicKey ? bestAsk.owner === publicKey.toBase58() : false;
   // Book PDA missing? `useOrderBookFor` returns `null` (distinct from
   // `undefined` while loading) when the account does not exist on
   // chain. In that state EVERY order-book instruction
@@ -1555,7 +1568,7 @@ export default function TradePage({
             </div>
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired || bookUninitialized}
+                disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired || bookUninitialized || bestBidIsSelf}
                 onClick={() =>
                   run(
                     "Buy No",
@@ -1571,9 +1584,11 @@ export default function TradePage({
                       ? "Order book PDA is not initialized for this market — see the panel on the left."
                       : holdsYes
                         ? "Sell your Yes position before buying No (PRD position constraint)"
-                        : bestBid
-                          ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
-                          : "No bid available"
+                        : bestBidIsSelf
+                          ? "Best bid is your own order — Buy No would self-cross and leave you with both a YES and a NO. Cancel your own bid first (the red x on the (you) row in the bids table)."
+                          : bestBid
+                            ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
+                            : "No bid available"
                 }
               >
                 {busy === "Buy No" ? "..." : "Buy No"}
@@ -1637,7 +1652,7 @@ export default function TradePage({
             </div>
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired || bookUninitialized}
+                disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired || bookUninitialized || bestAskIsSelf}
                 onClick={() =>
                   run(
                     "Sell No",
@@ -1653,9 +1668,11 @@ export default function TradePage({
                       ? "Order book PDA is not initialized for this market — see the panel on the left."
                       : !holdsNo
                         ? "Need No tokens to sell"
-                        : bestAsk
-                          ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
-                          : "No ask available"
+                        : bestAskIsSelf
+                          ? "Best ask is your own order — Sell No would self-cross. Cancel your own ask first (the red x on the (you) row in the asks table)."
+                          : bestAsk
+                            ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
+                            : "No ask available"
                 }
               >
                 {busy === "Sell No" ? "..." : "Sell No"}
