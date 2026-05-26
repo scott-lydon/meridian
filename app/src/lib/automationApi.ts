@@ -174,6 +174,106 @@ export async function postSettleMarket(
 }
 
 /**
+ * Input shape for POST /admin/init-order-book. Mirrors the server-side
+ * handler at automation/src/index.ts (function handleInitOrderBook).
+ */
+export interface InitOrderBookInput {
+  /** Base58 Solana account address of the Market PDA whose book should be initialized. */
+  readonly marketPubkey: string;
+}
+
+/**
+ * Success-shape response from POST /admin/init-order-book. Mirrors
+ * `EnsureOrderBookResult` in automation/src/jobs/ensureOrderBook.ts.
+ *
+ * `sig` is null when the book was already initialized (no transaction
+ * issued). `alreadyInitialized: true` distinguishes "we performed the
+ * init this call" from "we found it already in place"; the trade-page
+ * toast uses this to render an honest message instead of pretending it
+ * always issued a tx.
+ */
+export interface InitOrderBookResult {
+  readonly bookPubkey: string;
+  readonly bookAuthority: string;
+  readonly usdcEscrow: string;
+  readonly yesEscrow: string;
+  readonly sig: string | null;
+  readonly alreadyInitialized: boolean;
+}
+
+/**
+ * Call POST /admin/init-order-book for a single Market PDA. Used by the
+ * trade-page repair button when a market exists but its order book PDA
+ * has not yet been initialized (the failure mode that produces the
+ * Solflare "Simulation failed" popup on Sell Yes / Buy Yes against a
+ * brand-new market from the morning cron).
+ *
+ * Error shape: throws AutomationApiError with one of these slugs:
+ *   - "network" (0): the automation server is unreachable.
+ *   - "non_json_response" (any): the server returned non-JSON.
+ *   - "unauthorized" (401): admin/pass headers are missing or wrong.
+ *   - "market_not_found" (404): no Market account at that pubkey.
+ *   - "invalid_pubkey" (400): pubkey is not valid base58.
+ *   - "config_missing" (503): program config PDA is uninitialized.
+ *   - "init_book_tx_failed" (502): on-chain init reverted; message
+ *     contains the underlying Anchor/RPC error verbatim.
+ *   - "unexpected" (500): programmer bug; message is verbatim.
+ */
+export async function postInitOrderBook(
+  input: InitOrderBookInput,
+): Promise<InitOrderBookResult> {
+  let res: Response;
+  try {
+    res = await fetch(`${AUTOMATION_BASE_URL}/admin/init-order-book`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-admin-username": ADMIN_USERNAME,
+        "x-admin-password": ADMIN_PASSWORD,
+      },
+      body: JSON.stringify(input),
+      // 60s timeout — init_order_book is a single transaction on a
+      // ~7,296-byte account, but Solana devnet has been observed to
+      // take 20-30s for confirm under load. 60s headroom matches the
+      // other admin endpoints.
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    throw new AutomationApiError(
+      0,
+      "network",
+      `failed to reach the automation server at ${AUTOMATION_BASE_URL}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch (err) {
+    throw new AutomationApiError(
+      res.status,
+      "non_json_response",
+      `automation server returned HTTP ${res.status} with a non-JSON body: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+  if (!res.ok) {
+    const slug =
+      typeof body === "object" && body !== null && "error" in body
+        ? String((body as { error: unknown }).error)
+        : "unknown";
+    const message =
+      typeof body === "object" && body !== null && "message" in body
+        ? String((body as { message: unknown }).message)
+        : `HTTP ${res.status}`;
+    throw new AutomationApiError(res.status, slug, message);
+  }
+  return body as InitOrderBookResult;
+}
+
+/**
  * Call POST /admin/create-market. Throws AutomationApiError on any non-2xx
  * with the server-provided slug + message; throws plain Error for
  * network failures and shape mismatches.

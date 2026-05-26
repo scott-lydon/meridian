@@ -19,6 +19,9 @@ import {
   runCreateCustomMarket,
   CreateCustomMarketError,
 } from "./jobs/createCustomMarket.js";
+import { PublicKey } from "@solana/web3.js";
+import { buildAnchor } from "./lib/anchor.js";
+import { ensureOrderBook, EnsureOrderBookError } from "./jobs/ensureOrderBook.js";
 
 const env = loadEnv();
 const startedAt = new Date().toISOString();
@@ -409,6 +412,50 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
+  // ===== Admin-only: initialize a market's order book on demand. =====
+  //
+  // POST /admin/init-order-book with JSON body { marketPubkey: "...base58..." }
+  // and headers x-admin-username: admin / x-admin-password: pass.
+  //
+  // Why this exists: the on-chain `init_order_book` instruction has a
+  // `address = config.admin` constraint, so the BROWSER cannot call it
+  // directly — only this server (which holds the admin keypair) can.
+  // Before this endpoint, a market created without an order book
+  // (every market from the pre-fix morning cron) was non-tradable with
+  // no in-product remediation; the user saw `Simulation failed →
+  // Internal error` when they hit `Sell Yes` and there was no way to
+  // recover without an operator shell session. This endpoint plus the
+  // trade-page repair button makes the failure self-healing from the
+  // signed-in admin's browser.
+  //
+  // Idempotent at the order-book PDA: if the book already exists, the
+  // endpoint returns 200 with `alreadyInitialized: true` and no
+  // transaction is issued. Safe to call from a retry loop.
+  if (req.url === "/admin/init-order-book" && req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type, x-admin-username, x-admin-password",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return;
+  }
+  if (req.url === "/admin/init-order-book" && req.method === "POST") {
+    handleInitOrderBook(req, res).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, "/admin/init-order-book top-level error");
+      if (!res.headersSent) {
+        res.writeHead(500, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+        });
+        res.end(JSON.stringify({ error: "internal", message }));
+      }
+    });
+    return;
+  }
   res.writeHead(404, { "content-type": "text/plain" });
   res.end("not found\n");
 });
@@ -652,6 +699,138 @@ async function handleSettleMarket(
     }
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err: message }, "/admin/settle-market unexpected error");
+    return send(500, { error: "unexpected", message });
+  }
+}
+
+/**
+ * Handle POST /admin/init-order-book. Streams the body, parses,
+ * authorizes, runs the idempotent ensureOrderBook flow using the admin
+ * keypair, returns a JSON result the frontend uses to refresh the
+ * trade page.
+ *
+ * Response shape (200):
+ *   {
+ *     bookPubkey: string,
+ *     bookAuthority: string,
+ *     usdcEscrow: string,
+ *     yesEscrow: string,
+ *     sig: string | null,           // null when alreadyInitialized
+ *     alreadyInitialized: boolean,
+ *   }
+ *
+ * Error mapping:
+ *   - missing/wrong x-admin-username + x-admin-password headers -> 401
+ *   - invalid JSON body or missing marketPubkey -> 400
+ *   - EnsureOrderBookError.code MARKET_NOT_FOUND -> 404
+ *   - EnsureOrderBookError.code CONFIG_MISSING -> 503
+ *   - EnsureOrderBookError.code INIT_BOOK_TX_FAILED -> 502 (upstream Solana)
+ *   - anything else -> 500
+ */
+async function handleInitOrderBook(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  const corsHeaders = { "access-control-allow-origin": "*" } as const;
+  const send = (status: number, body: object): void => {
+    res.writeHead(status, { "content-type": "application/json", ...corsHeaders });
+    res.end(JSON.stringify(body));
+  };
+
+  // Auth gate — same admin/pass shape as /admin/create-market and
+  // /admin/settle-market. NOT a real security boundary; the actual
+  // gate is the on-chain `address = config.admin` constraint, which
+  // only the admin keypair (held by THIS server, never by the browser)
+  // can satisfy.
+  const headerUser = req.headers["x-admin-username"];
+  const headerPass = req.headers["x-admin-password"];
+  const username = Array.isArray(headerUser) ? headerUser[0] : headerUser;
+  const password = Array.isArray(headerPass) ? headerPass[0] : headerPass;
+  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    return send(401, {
+      error: "unauthorized",
+      message:
+        "missing or invalid x-admin-username + x-admin-password headers. " +
+        "Sign in at /admin on the frontend first; the page picks up the " +
+        "credentials from localStorage and includes them automatically.",
+    });
+  }
+
+  // Body parse with size cap (mirrors handleSettleMarket).
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+    if (chunks.reduce((s, c) => s + c.length, 0) > 8 * 1024) {
+      return send(413, {
+        error: "body_too_large",
+        message: "request body exceeded 8KB; expected a small JSON object",
+      });
+    }
+  }
+  const bodyStr = Buffer.concat(chunks).toString("utf8");
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyStr);
+  } catch (err) {
+    return send(400, {
+      error: "invalid_json",
+      message: `request body is not valid JSON: ${String(err)}`,
+    });
+  }
+  if (typeof body !== "object" || body === null) {
+    return send(400, {
+      error: "invalid_body_shape",
+      message: "request body must be a JSON object",
+    });
+  }
+  const { marketPubkey } = body as Record<string, unknown>;
+  if (typeof marketPubkey !== "string" || marketPubkey.length < 32 || marketPubkey.length > 44) {
+    return send(400, {
+      error: "missing_field",
+      message:
+        "field 'marketPubkey' is required, must be a base58-encoded Solana account address (32-44 chars). " +
+        "Got: " +
+        JSON.stringify(marketPubkey),
+    });
+  }
+  // Parse the pubkey at the boundary; surface a precise 400 instead of
+  // letting a generic 500 fall out of ensureOrderBook later.
+  let marketKey: PublicKey;
+  try {
+    marketKey = new PublicKey(marketPubkey);
+  } catch (err) {
+    return send(400, {
+      error: "invalid_pubkey",
+      message: `field 'marketPubkey' is not a valid base58 Solana pubkey: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+  }
+
+  try {
+    // Build the Anchor context lazily here (vs at module-init time) so
+    // the endpoint can run even if a future change moves the env load
+    // around. buildAnchor is cheap and stateless aside from RPC + key
+    // load.
+    const ctx = buildAnchor(env);
+    const usdcMint = new PublicKey(env.USDC_MINT);
+    const result = await ensureOrderBook(ctx, marketKey, usdcMint);
+    logger.info({ result }, "/admin/init-order-book succeeded");
+    return send(200, result);
+  } catch (err) {
+    if (err instanceof EnsureOrderBookError) {
+      if (err.code === "MARKET_NOT_FOUND") {
+        return send(404, { error: "market_not_found", message: err.message });
+      }
+      if (err.code === "CONFIG_MISSING") {
+        return send(503, { error: "config_missing", message: err.message });
+      }
+      if (err.code === "INIT_BOOK_TX_FAILED") {
+        return send(502, { error: "init_book_tx_failed", message: err.message });
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err: message }, "/admin/init-order-book unexpected error");
     return send(500, { error: "unexpected", message });
   }
 }
