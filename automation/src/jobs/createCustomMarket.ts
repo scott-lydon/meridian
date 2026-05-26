@@ -59,6 +59,7 @@ import {
   YES_MINT_SEED,
   pad6,
 } from "../lib/anchor.js";
+import { ensureOrderBook, EnsureOrderBookError } from "./ensureOrderBook.js";
 
 /** USDC base units per dollar. Matches programs/meridian/src/constants.rs. */
 const USDC_BASE = 1_000_000n;
@@ -312,51 +313,29 @@ export async function runCreateCustomMarket(
   }
 
   // ===== Step 3: init_order_book (idempotent). =====
+  // Delegates to the shared ensureOrderBook helper so the morning cron,
+  // the admin create-market flow, and the new /admin/init-order-book
+  // repair endpoint all share one implementation. See
+  // automation/src/jobs/ensureOrderBook.ts for the rationale.
+  //
+  // Map the typed `EnsureOrderBookError` codes to this module's typed
+  // `CreateCustomMarketError` codes so the HTTP handler's existing
+  // status-code mapping (4xx vs 5xx) keeps working unchanged.
   let initOrderBookSig: string | null = null;
   let orderBookAlreadyInitialized = false;
-  const bookInfo = await ctx.connection.getAccountInfo(orderBook);
-  if (bookInfo) {
-    orderBookAlreadyInitialized = true;
-    logger.info(
-      { market: market.toBase58(), orderBook: orderBook.toBase58() },
-      "create-custom-market: order book already initialized; reusing",
-    );
-  } else {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      initOrderBookSig = await (ctx.program.methods as any)
-        .initOrderBook()
-        .accounts({
-          config: cfg,
-          market,
-          orderBook,
-          bookAuthority: bookAuth,
-          usdcEscrow,
-          yesEscrow,
-          usdcMint,
-          yesMint,
-          admin: ctx.adminKeypair.publicKey,
-          systemProgram: SystemProgram.programId,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          rent: SYSVAR_RENT_PUBKEY,
-        })
-        .signers([ctx.adminKeypair])
-        .rpc();
-      logger.info(
-        { market: market.toBase58(), orderBook: orderBook.toBase58(), sig: initOrderBookSig },
-        "create-custom-market: initialized order book",
-      );
-    } catch (err) {
-      // Surface as a distinct error code so the UI can show:
-      // "Market was created but order book initialization failed; click
-      // Retry to finish setup." Versus a CREATE_TX_FAILED that means
-      // nothing was created.
-      throw new CreateCustomMarketError(
-        "INIT_BOOK_TX_FAILED",
-        `init_order_book transaction failed for market=${market.toBase58()}; the market was created but is not yet tradable. Retry the request to finish initialization. Cause: ${String(err)}`,
-      );
+  try {
+    const ensured = await ensureOrderBook(ctx, market, usdcMint);
+    initOrderBookSig = ensured.sig;
+    orderBookAlreadyInitialized = ensured.alreadyInitialized;
+  } catch (err) {
+    if (err instanceof EnsureOrderBookError) {
+      // INIT_BOOK_TX_FAILED is the only ensureOrderBook code that can
+      // reach this branch on a successful Step 2 (Market PDA confirmed
+      // to exist immediately above, config checked at Step 1 before
+      // create_strike_market). Wrap into the existing typed error.
+      throw new CreateCustomMarketError("INIT_BOOK_TX_FAILED", err.message);
     }
+    throw err;
   }
 
   return {

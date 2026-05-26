@@ -36,6 +36,7 @@ import {
   pad6,
 } from "../lib/anchor.js";
 import { SlackAlerter } from "../lib/alerts.js";
+import { ensureOrderBook } from "./ensureOrderBook.js";
 
 export interface MorningResult {
   readonly tradingDay: number;
@@ -69,6 +70,17 @@ export async function runMorningJob(env: Env): Promise<MorningResult> {
   let created = 0;
   let skipped = 0;
   let failed = 0;
+  // Track every market we touched today (created OR confirmed-still-exists)
+  // so the second pass can ensure each one has its order book initialized.
+  // We do this in a second pass instead of inline because the first pass
+  // wants to keep its inner try/catch boundary tight (create failures
+  // alert separately from book-init failures), and because the second
+  // pass must also pick up markets that were created by a PRIOR morning
+  // run before this fix shipped — those have a Market PDA but no
+  // OrderBook PDA, which is exactly the failure mode the user hit on
+  // 2026-05-26 when Sell Yes returned `Simulation failed → Internal error`.
+  const tradableMarkets: PublicKey[] = [];
+  const usdcMint = new PublicKey(env.USDC_MINT);
 
   for (const ticker of MAG7_TICKERS) {
     const p = prices[ticker];
@@ -82,6 +94,9 @@ export async function runMorningJob(env: Env): Promise<MorningResult> {
       const info = await ctx.connection.getAccountInfo(market);
       if (info) {
         skipped += 1;
+        // Even a "skipped" market goes into the tradable-markets list so
+        // ensureOrderBook backfills any market created by a pre-fix run.
+        tradableMarkets.push(market);
         continue;
       }
       try {
@@ -130,6 +145,7 @@ export async function runMorningJob(env: Env): Promise<MorningResult> {
           .signers([ctx.adminKeypair])
           .rpc();
         created += 1;
+        tradableMarkets.push(market);
         logger.info({ ticker, strike: s.strikeUsd, market: market.toBase58() }, "market created");
       } catch (err) {
         failed += 1;
@@ -138,11 +154,68 @@ export async function runMorningJob(env: Env): Promise<MorningResult> {
     }
   }
 
-  if (failed > 0) {
+  // ===== Second pass: ensure every tradable market has an order book. =====
+  //
+  // Pre-fix, this cron created Market PDAs but never called
+  // init_order_book. The downstream effect was that `place_order`,
+  // `buy_no`, and `sell_no` would revert at constraint evaluation
+  // because the `order_book` account did not exist. Solflare surfaced
+  // this as "Simulation failed"; the Meridian UI surfaced it as the
+  // verbose "Internal error" toast. See ensureOrderBook.ts for the
+  // full rationale.
+  //
+  // We run this pass even on tickers that failed to CREATE today,
+  // because `tradableMarkets` only contains markets whose Market PDA
+  // is confirmed to exist (either we created it in this run or we
+  // observed it from a prior run). ensureOrderBook is idempotent at
+  // the book PDA, so re-running over already-good markets is a cheap
+  // RPC read with no transaction issued.
+  let booksInitialized = 0;
+  let booksAlreadyOk = 0;
+  let booksFailed = 0;
+  for (const marketPubkey of tradableMarkets) {
+    try {
+      const result = await ensureOrderBook(ctx, marketPubkey, usdcMint);
+      if (result.alreadyInitialized) {
+        booksAlreadyOk += 1;
+      } else {
+        booksInitialized += 1;
+        logger.info(
+          { market: marketPubkey.toBase58(), sig: result.sig },
+          "morning: order book initialized",
+        );
+      }
+    } catch (err) {
+      booksFailed += 1;
+      // Don't abort the whole cron — one stuck book PDA must not
+      // poison the other six. The Slack alert below surfaces the
+      // count so an operator can investigate.
+      logger.error(
+        { market: marketPubkey.toBase58(), err: String(err) },
+        "morning: ensureOrderBook failed",
+      );
+    }
+  }
+  logger.info(
+    { booksInitialized, booksAlreadyOk, booksFailed },
+    "morning: order-book ensure pass complete",
+  );
+
+  if (failed > 0 || booksFailed > 0) {
     await alerter.fire({
       title: "Meridian morning job had failures",
-      body: `${failed} markets failed to create.`,
-      fields: { tradingDay: day, created, skipped, failed },
+      body:
+        `${failed} markets failed to create; ` +
+        `${booksFailed} order books failed to initialize.`,
+      fields: {
+        tradingDay: day,
+        created,
+        skipped,
+        failed,
+        booksInitialized,
+        booksAlreadyOk,
+        booksFailed,
+      },
     });
   }
   logger.info({ tradingDay: day, created, skipped, failed }, "morning job done");
