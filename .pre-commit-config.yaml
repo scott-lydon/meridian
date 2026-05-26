@@ -46,3 +46,15 @@ repos:
         language: system
         files: \.(ts|tsx)$
         pass_filenames: false
+
+      # Catches the redeem_pair-class failure where a Rust instruction is
+      # added but the bundled IDL JSON files are not regenerated. See
+      # BUG_PREVENTION.md entry #3 and scripts/check-idl-fresh.sh for the
+      # rationale and the full remediation. Triggers on every commit that
+      # touches the Anchor program, useTrade.ts, or any IDL file.
+      - id: check-idl-fresh
+        name: IDL JSON must match Anchor program instruction set
+        entry: bash scripts/check-idl-fresh.sh
+        language: system
+        files: '^(programs/meridian/src/instructions/.*\.rs|programs/meridian/src/lib\.rs|app/src/idl/meridian\.(json|ts)|automation/src/idl/meridian\.json|app/src/hooks/useTrade\.ts)$'
+        pass_filenames: false

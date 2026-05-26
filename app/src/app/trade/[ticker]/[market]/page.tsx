@@ -404,6 +404,24 @@ export default function TradePage({
         e,
       );
       setLastDelta(null);
+      // Auto-scroll the failure toast into view. The toast renders at
+      // the top of the page (above the order book / trade panel); on a
+      // short laptop or after the user has scrolled down to interact
+      // with the trade buttons, the toast appears OFF-screen and the
+      // user sees "nothing happened" instead of "Transaction failed."
+      // This was the entire user-reported failure mode for the
+      // redeem_pair-IDL-stale bug on 2026-05-26 — the toast WAS firing
+      // (`r.methods.redeemPair is not a function`) but the user was
+      // scrolled down in the trade panel. `requestAnimationFrame` so
+      // the new toast has committed to the DOM before we scroll to it.
+      if (typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          document.getElementById("trade-failure-toast")?.scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
+        });
+      }
     } finally {
       setBusy(null);
     }
@@ -495,7 +513,10 @@ export default function TradePage({
           parser couldn't produce a hero (older codepaths, network
           errors, etc.) the fallback message renders in place. */}
       {lastErr && (
-        <div className="mb-6 overflow-hidden rounded-2xl border-2 border-no/70 bg-panel shadow-lg">
+        <div
+          id="trade-failure-toast"
+          className="mb-6 overflow-hidden rounded-2xl border-2 border-no/70 bg-panel shadow-lg"
+        >
           <div className="flex items-start justify-between gap-4 border-b border-no/30 bg-no/15 px-5 py-4">
             <div className="flex items-start gap-3">
               <span aria-hidden className="text-2xl leading-none text-no">!</span>

@@ -81,4 +81,71 @@ of click.
 
 ---
 
-## 3. (template — add as we find them)
+## 3. IDL must be regenerated AND committed when a Rust instruction is added
+
+**Symptom seen 2026-05-26:** user clicked Redeem 1 pair on the live site
+with 1 YES + 1 NO and 38.50 USDC. The button click triggered
+`TypeError: r.methods.redeemPair is not a function` from the bundled
+`927-c5da2b9715a44f59.js`. The Transaction-failed toast rendered at the
+top of the trade page but was above the user's scroll position, so from
+the user's perspective "nothing happened."
+
+**Cause:** commit `6971a6c` (May 23) added the `redeem_pair` instruction
+in `programs/meridian/src/instructions/redeem_pair.rs` and wired it
+through `app/src/hooks/useTrade.ts:802` as `program.methods.redeemPair(...)`,
+but the IDL JSON shipped to the frontend (`app/src/idl/meridian.json`)
+and to the automation worker (`automation/src/idl/meridian.json`) was
+NOT regenerated. Anchor's JS client looks up `methods.<camelCaseName>`
+on the IDL at runtime; if the IDL has 15 instructions and the source
+has 16, the 16th is invisible to the client and the call site crashes
+with the `is not a function` TypeError. As a second compounding
+problem, the on-chain program binary on devnet was also stale (last
+deploy slot 463939285, before commit 6971a6c), so even with a correct
+IDL the simulation would have reverted with InstructionFallbackNotFound.
+
+**Why it's invisible today:** nothing on the commit path enforces
+"the set of instruction filenames in `programs/meridian/src/instructions/`
+equals the set of instruction names in `app/src/idl/meridian.json`."
+`anchor build` regenerates `target/idl/meridian.json` but does NOT
+copy it into `app/src/idl/`; that step is manual and was forgotten.
+`pre-commit` only runs rustfmt / clippy / cargo-check; it never
+inspects the IDL.
+
+**Fix landed in this commit:** added
+`scripts/check-idl-fresh.sh` which fails the build if the set of
+instruction names in `app/src/idl/meridian.json` does not equal the
+set derived from `programs/meridian/src/instructions/*.rs` minus
+`mod.rs`. Wired into `.pre-commit-config.yaml` and into the qa-adversary
+playbook. Now if you add `foo.rs` with `pub fn foo` in `lib.rs` and
+forget to `anchor build && cp target/idl/meridian.json app/src/idl/`,
+the commit refuses.
+
+**Surface-the-error follow-up:** also added a `useEffect` guard in
+`app/src/hooks/useTrade.ts` that, on mount, asserts every method the
+hook calls (`buyYes`, `sellYes`, `buyNo`, `sellNo`, `mintPair`,
+`redeemPair`, `cancelOrder`) exists on `program.methods`. If any is
+missing, the hook throws on mount with a message like
+`"IDL is stale: program.methods.redeemPair is missing. Regenerate
+with anchor build and copy target/idl/meridian.json into
+app/src/idl/."` — this lifts the failure from "click the button to
+discover" to "page won't load until fixed", which is louder and more
+diagnosable.
+
+**Also: scroll affordance for the Transaction-failed toast.** The
+toast renders at `app/src/app/trade/[ticker]/[market]/page.tsx:497`
+which is above the order-book / trade panel. On a 720p laptop the
+user scrolls down to interact with the trade buttons and the toast
+appears OFF-screen. Per the global rule in
+`~/.claude/CLAUDE.md` ("Scroll overflow on lengthy modal / popup
+content"), the toast should `position: sticky; top: 0` OR a one-shot
+`scrollIntoView({block: 'start'})` should fire when `setLastErr` is
+called, so the failure is visible regardless of scroll position.
+
+**Triggers that should ALSO run this check (added 2026-05-26):** any
+PR that touches `programs/meridian/src/instructions/`, `programs/meridian/src/lib.rs`,
+or `app/src/hooks/useTrade.ts`. The qa-adversary playbook reads this
+section and grep-asserts the invariant on every invocation.
+
+---
+
+## 4. (template — add as we find them)

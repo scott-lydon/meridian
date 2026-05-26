@@ -1060,6 +1060,97 @@ export type Meridian = {
       ]
     },
     {
+      "name": "redeemPair",
+      "docs": [
+        "Inverse of `mint_pair`: burn N Yes + N No, get N USDC back.",
+        "Pre-settlement only. Lets users unwind a paired position",
+        "without waiting for settlement or needing book liquidity."
+      ],
+      "discriminator": [
+        157,
+        102,
+        125,
+        192,
+        31,
+        48,
+        165,
+        114
+      ],
+      "accounts": [
+        {
+          "name": "config"
+        },
+        {
+          "name": "market",
+          "writable": true
+        },
+        {
+          "name": "vaultAuthority",
+          "docs": [
+            "The burn CPIs do NOT need this signer — the user owns the token",
+            "accounts being burned from, so `user` is the burn authority."
+          ]
+        },
+        {
+          "name": "yesMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "userUsdc",
+          "docs": [
+            "USDC destination for the redeemer."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userYes",
+          "docs": [
+            "User's Yes ATA — burn source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userNo",
+          "docs": [
+            "User's No ATA — burn source."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "qty",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "sellNo",
       "docs": [
         "Atomic IOC-buy-Yes + redeem-pair against the best ask.",
@@ -1452,6 +1543,16 @@ export type Meridian = {
       "code": 6024,
       "name": "invalidOrderPrice",
       "msg": "Order price must be between 1 and 99 ticks ($0.01 to $0.99)"
+    },
+    {
+      "code": 6025,
+      "name": "invalidOrderSide",
+      "msg": "Order side byte is neither 0 (Bid) nor 1 (Ask) — corrupted Order record"
+    },
+    {
+      "code": 6026,
+      "name": "oraclePriceFromFuture",
+      "msg": "Pyth publish_time is in the future relative to on-chain clock — likely cranker clock skew"
     }
   ],
   "types": [
