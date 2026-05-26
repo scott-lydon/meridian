@@ -42,6 +42,8 @@ import {
   WalletConnectionError,
   WalletWindowBlockedError,
   WalletWindowClosedError,
+  WalletSendTransactionError,
+  WalletSignTransactionError,
 } from "@solana/wallet-adapter-base";
 import { QueryClientProvider } from "@tanstack/react-query";
 
@@ -234,7 +236,25 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
     // gave up. See WalletWatcher above for the complementary defence
     // against silent-no-throw returns.
     // eslint-disable-next-line no-console
-    console.error("[wallet-adapter] connect/select failed:", err);
+    console.error("[wallet-adapter] wallet adapter error:", err);
+
+    // Send/sign-transaction failures route through this same onError hook
+    // AFTER the wallet is already connected. The global banner title is
+    // hard-coded "Wallet didn't connect" because its original purpose was
+    // surfacing connect/select failures — surfacing send/sign failures
+    // through it produces the misleading "wallet didn't connect" banner
+    // that 2026-05-25 user testing flagged (the wallet's pubkey was
+    // visibly present in the header). The per-page toast on the awaited
+    // `sendTransaction` promise rejection already owns these — see the
+    // trade page `run()` catch — so skipping the global banner here
+    // avoids double-surfacing and the wrong title.
+    if (
+      err instanceof WalletSendTransactionError ||
+      err instanceof WalletSignTransactionError
+    ) {
+      return;
+    }
+
     setWalletErrorMsg(describeWalletError(err));
   }, []);
 
