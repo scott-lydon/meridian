@@ -35,3 +35,52 @@ function deriveClusterName(rpcUrl: string): "devnet" | "testnet" | "mainnet" | "
   if (rpcUrl.includes("mainnet")) return "mainnet";
   return "localnet";
 }
+
+// Single source of truth for the official explorer.solana.com URLs we link
+// out to. Bare `?cluster=mainnet-beta` is the mainnet path; `?cluster=devnet`
+// for devnet; localnet uses the custom RPC param. Mainnet localnet would be
+// nonsensical, so `localnet` keeps the same path mainnet uses with the
+// custom URL appended so the user can paste it into the explorer's network
+// switcher.
+function explorerCluster(): string {
+  switch (cluster.name) {
+    case "mainnet":
+      return "mainnet-beta";
+    case "testnet":
+      return "testnet";
+    case "devnet":
+      return "devnet";
+    case "localnet":
+      // The explorer UI calls this "custom"; users have to set the RPC URL
+      // manually in the explorer's settings dialog, but linking with
+      // ?cluster=custom is the canonical way.
+      return "custom";
+  }
+}
+
+/**
+ * URL to view a Solana transaction signature on the official Solana
+ * Explorer, scoped to the cluster Meridian itself is on. Caller passes the
+ * raw signature string from a sendTransaction return value.
+ *
+ * Why centralize: the same URL was hard-coded with `?cluster=devnet` in at
+ * least three places (TradePage, HistoryPage, admin force-settle toast),
+ * and a mainnet bring-up that forgets to update one of them silently links
+ * to the wrong cluster from the production UI.
+ */
+export function explorerTxUrl(signature: string): string {
+  return `https://explorer.solana.com/tx/${signature}?cluster=${explorerCluster()}`;
+}
+
+/**
+ * URL to view any Solana account / address / token-account / mint on the
+ * official Solana Explorer. Same cluster-routing as `explorerTxUrl`.
+ *
+ * Use cases: the "view this token account on-chain" pills on the trade
+ * page (see-for-yourself transparency rule in
+ * `~/.claude/CLAUDE.md → transparency + debug routes`), and the "view this
+ * wallet on Solana Explorer" link on the history page.
+ */
+export function explorerAddressUrl(address: string): string {
+  return `https://explorer.solana.com/address/${address}?cluster=${explorerCluster()}`;
+}
