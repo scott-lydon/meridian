@@ -339,10 +339,44 @@ export default function TradePage({
               fix. Book-liquidity gates (no bestBid / no bestAsk) belong here
               too because they disable Buy No / Sell No for non-position
               reasons that the user otherwise has no way to discover. */}
-          {(holdsYes || holdsNo || !bestBid || !bestAsk) && (
+          {(holdsYes || holdsNo || !bestBid || !bestAsk || isExpired) && (
             <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-200">
               <p className="font-semibold text-yellow-100">Why some buttons are disabled:</p>
               <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                {/*
+                  Expired-market gate is listed FIRST because it disables
+                  every trade button at once (including Mint Pair and
+                  Redeem Pair), making it the most load-bearing reason
+                  when it fires. Reported 2026-05-25 by a tester who
+                  signed in as admin and could not figure out why mint
+                  was dim — the constraint box only listed Buy No / Sell
+                  No book-liquidity reasons even though every button was
+                  disabled by `isExpired`. The branch on `adminMode`
+                  surfaces the after-hours-toggle override path only to
+                  visitors who actually have access to it; non-admins
+                  get the wait-for-tomorrow guidance instead, because
+                  the toggle is gated on admin sign-in via
+                  `useAfterHoursMode`'s admin AND-gate.
+                */}
+                {isExpired && (
+                  <li>
+                    <span className="font-semibold">All trade buttons</span> (Buy Yes, Buy No, Sell Yes, Sell No,
+                    Mint Pair, Redeem Pair) are disabled because this market is past its 16:00 ET expiry and is
+                    awaiting settlement.{" "}
+                    {adminMode ? (
+                      <>
+                        To bypass for testing, click the <span className="font-mono">🧪 DEV</span> pill in the header
+                        and flip <em>Bypass UI expiry gates</em> to ON. The on-chain program accepts these
+                        instructions 24/7; only the UI hides them past expiry.
+                      </>
+                    ) : (
+                      <>
+                        Visit a market that has not yet expired, or wait for the morning cron at 08:00 ET to create
+                        today&apos;s strikes.
+                      </>
+                    )}
+                  </li>
+                )}
                 {holdsNo && (
                   <li>
                     <span className="font-semibold">Buy Yes</span> is disabled because you already hold NO tokens.
@@ -379,6 +413,63 @@ export default function TradePage({
               )}
             </div>
           )}
+        </section>
+      )}
+
+      {/*
+        Cluster-mismatch banner. Renders only when the connected wallet
+        has 0 lamports on the site's RPC, the single signal we can
+        observe without the wallet extension's cooperation. See the WTF
+        on `showClusterMismatchBanner` for why this is the only reliable
+        heuristic and why we deliberately enumerate both plausible
+        causes (genuine zero balance + wrong cluster) instead of
+        claiming to know which one is in play. Placed above the
+        order-book + trade panel grid so a user about to click a buy
+        button sees it in the same scroll position as the buttons.
+        Does NOT block the buttons — the on-chain refusal (or the
+        Phantom popup's own "not enough SOL") remains authoritative.
+      */}
+      {showClusterMismatchBanner && (
+        <section
+          role="alert"
+          className="mb-6 rounded-2xl border border-no/50 bg-no/10 p-4 text-sm"
+        >
+          <p className="font-semibold text-no">
+            Your wallet shows 0 SOL on {cluster.name}. Transactions will fail with &quot;not
+            enough SOL&quot; until this is resolved.
+          </p>
+          <p className="mt-2 text-no/90">
+            Two possible causes. The site cannot tell which one applies because the Solana
+            Wallet Standard does not expose your wallet&apos;s selected cluster.
+          </p>
+          <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-text">
+            <li>
+              <span className="font-semibold">Your wallet extension is on a different cluster
+                (most common after a fresh install).</span>{" "}
+              Phantom defaults to Mainnet; Meridian runs on {cluster.name}. Open the
+              extension, go to <span className="font-mono">Settings → Developer Settings →
+                Testnet Mode ON</span>, then pick <span className="font-mono">{cluster.name}</span>{" "}
+              from the network selector. Address stays the same; only the cluster filter
+              changes.
+            </li>
+            <li>
+              <span className="font-semibold">Your wallet genuinely has 0 SOL on {cluster.name}.</span>{" "}
+              Visit{" "}
+              <a
+                href="https://faucet.solana.com"
+                target="_blank"
+                rel="noreferrer"
+                className="text-accent underline"
+              >
+                faucet.solana.com
+              </a>
+              , paste your wallet address, request 1 SOL. Free, used for transaction fees only.
+            </li>
+          </ol>
+          <p className="mt-2 text-xs text-muted">
+            This banner clears automatically once your wallet&apos;s {cluster.name} SOL balance
+            goes above zero.
+          </p>
         </section>
       )}
 
