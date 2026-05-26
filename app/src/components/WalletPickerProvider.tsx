@@ -51,6 +51,7 @@ import {
   getWalletInstallUrl,
   type SupportedInstallWalletName,
 } from "@/lib/walletInstallLinks";
+import { dismissWalletErrorBanner } from "@/components/WalletProvider";
 
 interface WalletPickerContextValue {
   /** Open the picker modal. Idempotent. */
@@ -212,6 +213,13 @@ function PostInstallChecklist() {
 
 function WalletPickerModal({ onClose }: { onClose: () => void }) {
   const { wallets, select, connect } = useWallet();
+  // Inline notice rendered when the user clicks a NotDetected wallet row.
+  // We keep the picker OPEN and surface "open extension, sign in, reload"
+  // copy in-place instead of closing the picker and letting the connect
+  // attempt throw WalletNotReadyError → top-of-page banner. The banner
+  // route is jarring because the picker disappears and the user thinks
+  // their click "didn't work." Reported 2026-05-26.
+  const [notReadyNotice, setNotReadyNotice] = useState<string | null>(null);
 
   // The Solana Wallet Standard auto-discovers wallets and reports readyState.
   // We only render "Installed" entries as clickable connect buttons because
@@ -253,6 +261,32 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
 
   const onPickWallet = useCallback(
     async (name: string) => {
+      // Branch on the picked wallet's readyState. NotDetected means the
+      // extension global isn't visible to this page yet — typically
+      // because the user hasn't signed into / unlocked the extension.
+      // Firing connect() in that state throws WalletNotReadyError which
+      // would close the picker and surface the misleading top-of-page
+      // banner. Better: keep the picker open with an actionable inline
+      // notice telling the user exactly what to do next.
+      const picked = wallets.find((w) => w.adapter.name === name);
+      if (picked && picked.readyState !== WalletReadyState.Installed) {
+        setNotReadyNotice(
+          `${name} is installed but not signed in. Click the ${name} extension icon ` +
+            `in your browser toolbar (top-right), sign in or unlock the wallet, then ` +
+            `click "${name}" here again. You don't need to reload the page.`,
+        );
+        // Still call select() so a subsequent auto-detect tick can transition
+        // the wallet into the Detected list naturally once it injects.
+        select(name as WalletName);
+        // Clear the global "wallet didn't connect" banner if it was up;
+        // this user action supersedes any prior autoConnect failure.
+        dismissWalletErrorBanner();
+        return;
+      }
+      // Detected path (unchanged) — close the modal, the wallet popup
+      // pops forward, connect() finishes the flow.
+      setNotReadyNotice(null);
+      dismissWalletErrorBanner();
       // select() in wallet-adapter-react v0.15+ triggers the autoConnect
       // useEffect to fire connect() on the next render. We close the modal
       // immediately so the user sees the wallet popup pop forward.
@@ -274,7 +308,7 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
         // surface for connect failures. Re-throwing here would double-banner.
       }
     },
-    [connect, onClose, select],
+    [connect, onClose, select, wallets],
   );
 
   return (
@@ -321,6 +355,31 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-6 pt-4">
+
+        {notReadyNotice && (
+          // Inline notice for the "I clicked a wallet that's installed
+          // but not yet signed in" path. Replaces the disruptive
+          // top-of-page banner + picker-close cycle with an actionable
+          // message that stays adjacent to the wallet row the user
+          // clicked. Auto-clears when the user picks a different wallet
+          // OR when the picker is reopened.
+          <div
+            role="alert"
+            className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200"
+          >
+            <p className="mb-1 font-semibold text-amber-100">
+              Sign in to the extension to continue.
+            </p>
+            <p>{notReadyNotice}</p>
+            <button
+              type="button"
+              onClick={() => setNotReadyNotice(null)}
+              className="mt-2 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-500/20"
+            >
+              Got it, hide this
+            </button>
+          </div>
+        )}
 
         {detected.length > 0 && (
           <section className="mb-5">

@@ -66,6 +66,20 @@ import { WalletPickerProvider } from "@/components/WalletPickerProvider";
 
 const WATCHER_TIMEOUT_MS = 4_000;
 
+// Custom event other components dispatch to dismiss the "Wallet didn't
+// connect" banner. The most common use case: when the user clicks the
+// Connect Wallet button, any stale autoConnect failure banner from page
+// load should be dismissed so the user-initiated picker flow gets a
+// clean slate. Mirrors the meridian:afterHoursModeChanged pattern.
+//
+// Exported so ConnectWalletButton and the wallet picker can dispatch
+// without re-declaring the string. Listening side is in MeridianProviders.
+export const WALLET_ERROR_DISMISS_EVENT = "meridian:dismissWalletErrorBanner";
+export function dismissWalletErrorBanner(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(WALLET_ERROR_DISMISS_EVENT));
+}
+
 /**
  * Map a raw `WalletError` to a short, action-oriented sentence a non-developer
  * can act on. The default `error.message` on wallet-adapter errors is too
@@ -245,6 +259,17 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
   );
 
   const [walletErrorMsg, setWalletErrorMsg] = useState<string | null>(null);
+
+  // Listen for explicit dismiss requests from elsewhere in the app
+  // (currently: ConnectWalletButton click, picker onPickWallet, etc.).
+  // The dismiss request is fire-and-forget; we always honor it because
+  // banner persistence is "until the user takes another action," and
+  // dispatching the event IS that action.
+  useEffect(() => {
+    const handler = () => setWalletErrorMsg(null);
+    window.addEventListener(WALLET_ERROR_DISMISS_EVENT, handler);
+    return () => window.removeEventListener(WALLET_ERROR_DISMISS_EVENT, handler);
+  }, []);
 
   const onWalletError = useCallback((err: WalletError) => {
     // Full detail in the console for developers; short actionable line in

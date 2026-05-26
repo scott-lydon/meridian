@@ -20,6 +20,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import clsx from "clsx";
 
 import { useWalletPicker } from "@/components/WalletPickerProvider";
+import { dismissWalletErrorBanner } from "@/components/WalletProvider";
 
 interface ConnectWalletButtonProps {
   /** Tailwind class overrides for size/padding tweaks at specific call sites. */
@@ -50,7 +51,7 @@ export function ConnectWalletButton({
   className,
   label = "Connect Wallet",
 }: ConnectWalletButtonProps) {
-  const { publicKey, disconnect, connecting } = useWallet();
+  const { publicKey, disconnect, connecting, select, wallet } = useWallet();
   const { open } = useWalletPicker();
 
   const onClick = useCallback(async () => {
@@ -65,8 +66,37 @@ export function ConnectWalletButton({
       }
       return;
     }
+    // Clean-slate the connect flow:
+    //
+    // 1. Dismiss any "Wallet didn't connect" banner left over from a
+    //    page-load autoConnect failure. The banner persists until the
+    //    user takes another action; this click IS that action, so the
+    //    banner getting in the way of the picker (or just confusing
+    //    the user about why their click "didn't work") is wrong.
+    // 2. Clear the previously-selected-but-not-ready wallet so
+    //    autoConnect cannot race the picker. Without this, opening
+    //    the picker while autoConnect is still mid-flight on a
+    //    NotReady wallet can produce a second WalletNotReadyError
+    //    that re-pops the banner the moment the user opens the
+    //    picker. We only clear the selection if the currently-
+    //    selected wallet is itself not Installed; an actually-ready
+    //    wallet selection is the normal "reconnect to my last
+    //    wallet" path and should be left alone for autoConnect to
+    //    finish.
+    dismissWalletErrorBanner();
+    const selectedReadyState = wallet?.adapter.readyState;
+    if (
+      wallet &&
+      selectedReadyState !== "Installed" &&
+      selectedReadyState !== undefined
+    ) {
+      // Passing null tells the adapter "no wallet selected" and aborts
+      // the current connect attempt.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (select as unknown as (n: any) => void)(null);
+    }
     open();
-  }, [publicKey, disconnect, open]);
+  }, [publicKey, disconnect, open, select, wallet]);
 
   const baseClass =
     "inline-flex items-center justify-center rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-accentHover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-60";
