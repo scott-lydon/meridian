@@ -595,8 +595,10 @@ export default function TradePage({
               <p className="mb-2 font-semibold text-text">Connect a wallet to mint, buy, or sell</p>
               <p className="mb-3 text-xs text-muted">
                 Trading goes directly to the Solana devnet program — every action requires a
-                signature. Set your Phantom or Solflare wallet to Devnet, then click below.
-                Click the DEVNET pill in the header for click-by-click instructions for your wallet.
+                signature. Set your wallet (Phantom, Solflare, or Coinbase Wallet — Coinbase
+                Wallet has no per-network setting to flip; Meridian's RPC drives the cluster)
+                to Devnet if needed, then click below. Click the DEVNET pill in the header for
+                click-by-click instructions for your wallet.
               </p>
               <ConnectWalletButton className="h-10 text-sm" />
             </div>
