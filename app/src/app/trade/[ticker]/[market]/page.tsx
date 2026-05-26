@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWallet } from "@solana/wallet-adapter-react";
 
@@ -9,20 +10,49 @@ import { ConnectWalletButton } from "@/components/ConnectWalletButton";
 import { InfoTip } from "@/components/InfoTip";
 import { useMeridian } from "@/hooks/useMeridian";
 import { useMarkets } from "@/hooks/useMarkets";
-import { useTrade } from "@/hooks/useTrade";
+import { useTrade, deriveMarketAddresses } from "@/hooks/useTrade";
 import { useMarketBalances } from "@/hooks/useMarketBalances";
 import { useSolBalance } from "@/hooks/useSolBalance";
 import { formatUsdc, type UsdcBase, usdcFromBase } from "@/lib/usdc";
 import { queryKeys } from "@/lib/queryClient";
 import { marketUiState } from "@/lib/marketSession";
 import { useAfterHoursMode } from "@/lib/afterHoursMode";
-import { cluster } from "@/lib/cluster";
+import { cluster, explorerAddressUrl, explorerTxUrl } from "@/lib/cluster";
 import { useAdminMode } from "@/lib/adminMode";
 import {
   AutomationApiError,
+  postInitOrderBook,
   postSettleMarket,
+  type InitOrderBookResult,
   type SettleMarketResult,
 } from "@/lib/automationApi";
+
+// Short, deterministic error ID for failure toasts. We want two
+// properties from this hash:
+//   1. Stable for an identical payload: the same wallet hitting the same
+//      revert produces the same short ID, so a user can grep server
+//      logs by it without ambiguity.
+//   2. Short enough to read aloud / paste into Slack (8 hex chars =
+//      32 bits of entropy ≈ 4.3 billion distinct IDs). Collisions are
+//      acceptable in a debug context; the FULL error payload is also
+//      written to the browser console under the same ID so the
+//      operator can disambiguate by reading the console alongside.
+// Uses a FNV-1a 32-bit hash because it is purpose-built for short
+// strings, requires no dependencies, and produces zero allocations in
+// the hot path. SHA-256 from WebCrypto is overkill for an in-memory
+// correlation ID and is async, which would force the failure-toast
+// render path through a useEffect dance for no gain.
+function hashForErrorId(input: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    // Bit-shift the FNV prime into the hash; the >>> 0 keeps the
+    // result a 32-bit unsigned integer despite JS's signed bitwise
+    // semantics.
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
 
 function useCountdown(toUnix: number | undefined): string {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -131,6 +161,25 @@ export default function TradePage({
   const [busy, setBusy] = useState<string | null>(null);
   const [lastSig, setLastSig] = useState<string | null>(null);
   const [lastErr, setLastErr] = useState<string | null>(null);
+  // Short hash of the last error payload (8 hex chars). Surfaced in the
+  // failure toast so the user can paste it into Slack / a support
+  // request, and we can correlate it with the full error written to
+  // window.console. See `hashForErrorId` above for the algorithm.
+  const [lastErrId, setLastErrId] = useState<string | null>(null);
+  // Collapsible state for the "Why some buttons are disabled" panel.
+  // Default collapsed per user preference; clicking the heading row
+  // expands it. State is component-local because the user's reasoning
+  // is "I want to glance at the constraint reason on demand without
+  // having a tall yellow box on screen for the whole session."
+  const [disabledReasonsExpanded, setDisabledReasonsExpanded] = useState(false);
+  // Repair-book state. Distinct from the trade `busy` / `lastSig` /
+  // `lastErr` triplet because the repair flow targets a different
+  // surface (the automation server's /admin/init-order-book endpoint)
+  // and conflating its state with trade-tx state would render the toast
+  // for the wrong action.
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairResult, setRepairResult] = useState<InitOrderBookResult | null>(null);
+  const [repairErr, setRepairErr] = useState<string | null>(null);
   // Admin-only force-settle UI state. Kept distinct from the trade
   // `busy` / `lastSig` / `lastErr` triplet because settle is a separate
   // surface (admin server endpoint, not the user's wallet) and mixing
@@ -203,9 +252,38 @@ export default function TradePage({
   const showClusterMismatchBanner =
     !!publicKey && solBalance.isSuccess && solBalance.data.lamports === 0n;
 
-  function explorerTx(sig: string) {
-    return `https://explorer.solana.com/tx/${sig}?cluster=devnet`;
-  }
+  // Derive the user's YES + NO ATAs once per render so the pills can link
+  // out to Solana Explorer ("see for yourself" — the on-chain proof that
+  // the pill's number is exactly what the chain says). `program` is the
+  // typed Anchor client; `market` is the market PDA string from the URL.
+  //
+  // Why compute it here (vs in useMarketBalances): the ATA is a pure
+  // function of (mint, owner). We do NOT want to bolt the URL onto the
+  // balance hook's return value because that hook is also used in places
+  // (header constraint box) where the explorer link is irrelevant. Keep
+  // the URL builder at the call site where it's needed.
+  //
+  // The deriveMarketAddresses + getAssociatedTokenAddressSync calls are
+  // sync and cheap (no RPC); safe to re-do every render.
+  const { program } = useMeridian();
+  const userTokenAtas =
+    publicKey && market
+      ? (() => {
+          try {
+            const addrs = deriveMarketAddresses(program.programId, new PublicKey(market));
+            return {
+              yesAta: getAssociatedTokenAddressSync(addrs.yesMint, publicKey).toBase58(),
+              noAta: getAssociatedTokenAddressSync(addrs.noMint, publicKey).toBase58(),
+              yesMint: addrs.yesMint.toBase58(),
+              noMint: addrs.noMint.toBase58(),
+            };
+          } catch {
+            // Invalid market PDA string. The page's "market not found" branch
+            // below already handles this; don't crash the render here.
+            return null;
+          }
+        })()
+      : null;
 
   // `delta` is an optional human-readable description of the expected
   // balance change ("+3 YES, +3 NO, −$3 USDC"). The confirmation toast
@@ -216,10 +294,12 @@ export default function TradePage({
   async function run(label: string, fn: () => Promise<string>, delta?: string) {
     if (!publicKey) {
       setLastErr("Connect a wallet first.");
+      setLastErrId(null);
       return;
     }
     setBusy(label);
     setLastErr(null);
+    setLastErrId(null);
     setLastSig(null);
     setLastDelta(null);
     try {
@@ -231,7 +311,20 @@ export default function TradePage({
       void queryClient.invalidateQueries({ queryKey: queryKeys.orderBook(market) });
       void queryClient.invalidateQueries({ queryKey: ["market-balances", market, publicKey.toBase58()] });
     } catch (e) {
-      setLastErr(e instanceof Error ? e.message : String(e));
+      // Capture the FULL error verbatim for the console (so an operator
+      // with devtools can grep it), and derive a short 8-hex correlation
+      // ID for the on-screen toast. The user-facing message stays
+      // human-readable; the long stack/RPC verbatim never collides with
+      // the toast layout.
+      const fullText = e instanceof Error ? (e.stack ?? e.message) : String(e);
+      const shortMessage = e instanceof Error ? e.message : String(e);
+      const errId = hashForErrorId(`${label}|${publicKey.toBase58()}|${market}|${fullText}`);
+      console.error(
+        `[meridian trade] action="${label}" errId=${errId} market=${market} wallet=${publicKey.toBase58()}`,
+        e,
+      );
+      setLastErr(shortMessage);
+      setLastErrId(errId);
       setLastDelta(null);
     } finally {
       setBusy(null);
@@ -240,6 +333,14 @@ export default function TradePage({
 
   const bestBid = book?.bids[0];
   const bestAsk = book?.asks[0];
+  // Book PDA missing? `useOrderBookFor` returns `null` (distinct from
+  // `undefined` while loading) when the account does not exist on
+  // chain. In that state EVERY order-book instruction
+  // (place_order / buy_no / sell_no / cancel_order) reverts at the
+  // `AccountLoader<OrderBook>` constraint. Disable the four trade
+  // buttons so the user does not produce another "Simulation failed"
+  // toast; the repair affordance above is the path to fix it.
+  const bookUninitialized = !bookLoading && book === null;
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
@@ -293,7 +394,7 @@ export default function TradePage({
                   <p className="mt-0.5 font-mono text-sm text-yes">{lastDelta}</p>
                 )}
                 <p className="text-xs text-muted">
-                  <a className="text-accent underline" href={explorerTx(lastSig)} target="_blank" rel="noreferrer">
+                  <a className="text-accent underline" href={explorerTxUrl(lastSig)} target="_blank" rel="noreferrer">
                     View on Solana Explorer →
                   </a>
                   <span className="ml-2 font-mono">{lastSig.slice(0, 10)}…{lastSig.slice(-6)}</span>
@@ -302,16 +403,53 @@ export default function TradePage({
             </div>
           )}
           {lastErr && (
-            <div className="flex items-center gap-3 text-sm">
+            <div className="flex items-start gap-3 text-sm">
               <span className="text-xl text-no">!</span>
-              <div>
-                <p className="font-semibold text-no">Transaction failed</p>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <p className="font-semibold text-no">Transaction failed</p>
+                  {lastErrId && (
+                    // Short correlation ID. Render as a copy-on-click pill
+                    // so the user can paste it into a support request or
+                    // a Slack message without selecting/copying the long
+                    // text below. The clipboard write is "best effort":
+                    // if the API is unavailable (HTTP context, etc.), the
+                    // user can still triple-click the pill to select-all.
+                    <button
+                      type="button"
+                      onClick={() => {
+                        try {
+                          void navigator.clipboard?.writeText(lastErrId);
+                        } catch {
+                          // Best effort — older Safari, file:// contexts.
+                          // Manual select-and-copy still works.
+                        }
+                      }}
+                      className="rounded-full border border-no/40 bg-no/10 px-2 py-0.5 font-mono text-[10px] text-no hover:bg-no/20"
+                      title="Click to copy this short error ID. Paste it into a support request; the full error is in your browser console (Cmd+Option+J / Ctrl+Shift+J), keyed by the same ID."
+                    >
+                      err id: {lastErrId} (click to copy)
+                    </button>
+                  )}
+                </div>
                 <p className="break-words text-xs text-no/80">{lastErr}</p>
+                {lastErrId && (
+                  <p className="mt-1 text-[10px] text-muted">
+                    Full error written to the browser console under this ID. Open devtools
+                    (Cmd+Option+J / Ctrl+Shift+J) and search for &quot;{lastErrId}&quot; for
+                    the verbatim stack + RPC payload.
+                  </p>
+                )}
               </div>
             </div>
           )}
           <button
-            onClick={() => { setLastSig(null); setLastErr(null); setLastDelta(null); }}
+            onClick={() => {
+              setLastSig(null);
+              setLastErr(null);
+              setLastErrId(null);
+              setLastDelta(null);
+            }}
             className="rounded p-1 text-muted hover:bg-panel hover:text-text"
             aria-label="Dismiss"
             title="Dismiss"
@@ -354,23 +492,133 @@ export default function TradePage({
             <span className="text-xs uppercase tracking-wider text-muted">
               Your holdings in this market:
             </span>
-            <span className="rounded-full bg-yes/20 px-3 py-1 text-yes">
-              YES tokens owned: <span className="font-mono font-semibold">{userYesBal.toString()}</span>
-            </span>
-            <span className="rounded-full bg-no/20 px-3 py-1 text-no">
-              NO tokens owned: <span className="font-mono font-semibold">{userNoBal.toString()}</span>
-            </span>
+            {/*
+              Each pill is a "see for yourself" link to the actual SPL
+              token account on Solana Explorer (CLAUDE.md → transparency +
+              debug routes). The user can verify the on-chain balance with
+              their own eyes instead of trusting Meridian's render. The ↗
+              glyph signals external link without taking up much room.
+              `userTokenAtas` is null only when there is no connected
+              wallet (`publicKey` falsy) or the market PDA could not be
+              parsed; both render branches above already gate on those, so
+              by here we expect userTokenAtas to exist. The `??` defensive
+              fallback to plain text matches the prior render so the page
+              never breaks even if the ATA derivation throws.
+            */}
+            {userTokenAtas ? (
+              <a
+                href={explorerAddressUrl(userTokenAtas.yesAta)}
+                target="_blank"
+                rel="noreferrer"
+                className="group inline-flex items-center gap-1.5 rounded-full bg-yes/20 px-3 py-1 text-yes transition-colors hover:bg-yes/30 hover:underline"
+                title={`Open this YES token account on Solana Explorer (${cluster.name}). The balance you see here is the same number that account holds on-chain.`}
+              >
+                <span>
+                  YES tokens owned:{" "}
+                  <span className="font-mono font-semibold">{userYesBal.toString()}</span>
+                </span>
+                <span aria-hidden className="text-[10px] opacity-70 group-hover:opacity-100">
+                  ↗
+                </span>
+              </a>
+            ) : (
+              <span className="rounded-full bg-yes/20 px-3 py-1 text-yes">
+                YES tokens owned:{" "}
+                <span className="font-mono font-semibold">{userYesBal.toString()}</span>
+              </span>
+            )}
+            {userTokenAtas ? (
+              <a
+                href={explorerAddressUrl(userTokenAtas.noAta)}
+                target="_blank"
+                rel="noreferrer"
+                className="group inline-flex items-center gap-1.5 rounded-full bg-no/20 px-3 py-1 text-no transition-colors hover:bg-no/30 hover:underline"
+                title={`Open this NO token account on Solana Explorer (${cluster.name}). The balance you see here is the same number that account holds on-chain.`}
+              >
+                <span>
+                  NO tokens owned:{" "}
+                  <span className="font-mono font-semibold">{userNoBal.toString()}</span>
+                </span>
+                <span aria-hidden className="text-[10px] opacity-70 group-hover:opacity-100">
+                  ↗
+                </span>
+              </a>
+            ) : (
+              <span className="rounded-full bg-no/20 px-3 py-1 text-no">
+                NO tokens owned:{" "}
+                <span className="font-mono font-semibold">{userNoBal.toString()}</span>
+              </span>
+            )}
           </div>
+          {/* Companion line that names the on-chain mints so the user can
+              also inspect the SUPPLY of YES vs NO across all wallets — that
+              is, the open interest of this market. Smaller / muted because
+              it is an advanced affordance, not the primary signal. */}
+          {userTokenAtas && (userYesBal > 0n || userNoBal > 0n) && (
+            <p className="text-[11px] text-muted">
+              Mints:{" "}
+              <a
+                href={explorerAddressUrl(userTokenAtas.yesMint)}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-accent underline decoration-accent/40 hover:text-accentHover"
+                title="Open the YES mint on Solana Explorer to see total supply (open interest) and every holder."
+              >
+                YES mint
+              </a>
+              {" · "}
+              <a
+                href={explorerAddressUrl(userTokenAtas.noMint)}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-accent underline decoration-accent/40 hover:text-accentHover"
+                title="Open the NO mint on Solana Explorer to see total supply (open interest) and every holder."
+              >
+                NO mint
+              </a>
+            </p>
+          )}
           {/* Surface ALL active gates, not just one. The prior single-line
               constraint only ever named one side (`holdsYes ? "No" : "Yes"`),
               so a user holding BOTH sides saw "cannot Buy No" while Buy Yes
               was also blocked — silently. Listing every active reason is the
               fix. Book-liquidity gates (no bestBid / no bestAsk) belong here
               too because they disable Buy No / Sell No for non-position
-              reasons that the user otherwise has no way to discover. */}
+              reasons that the user otherwise has no way to discover.
+
+              Collapsible disclosure (default closed). The user reported
+              that always-open mode pushed real content below the fold;
+              collapsing lets them peek on demand without losing the
+              affordance. The heading row is the toggle; the chevron
+              flips to communicate state. State is component-local
+              (`disabledReasonsExpanded`) — survives re-renders, resets
+              on navigation. */}
           {(holdsYes || holdsNo || !bestBid || !bestAsk || isExpired) && (
-            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-xs text-yellow-200">
-              <p className="font-semibold text-yellow-100">Why some buttons are disabled:</p>
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 text-xs text-yellow-200">
+              <button
+                type="button"
+                onClick={() => setDisabledReasonsExpanded((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-yellow-500/5"
+                aria-expanded={disabledReasonsExpanded}
+                aria-controls="why-disabled-content"
+                title={
+                  disabledReasonsExpanded
+                    ? "Hide the disabled-button reasons"
+                    : "Show why some trade buttons are currently disabled"
+                }
+              >
+                <span className="font-semibold text-yellow-100">
+                  Why some buttons are disabled:
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={`transition-transform ${disabledReasonsExpanded ? "rotate-90" : ""}`}
+                >
+                  ▶
+                </span>
+              </button>
+              {disabledReasonsExpanded && (
+                <div id="why-disabled-content" className="px-3 pb-3">
               <ul className="mt-1 list-disc space-y-0.5 pl-5">
                 {/*
                   Expired-market gate is listed FIRST because it disables
@@ -439,6 +687,8 @@ export default function TradePage({
                   (each YES+NO pair pays exactly $1 at settlement regardless of outcome), so the product blocks
                   you from accidentally minting more.
                 </p>
+              )}
+                </div>
               )}
             </div>
           )}
@@ -509,9 +759,105 @@ export default function TradePage({
           </h2>
           {bookLoading && <p className="text-muted">Loading book...</p>}
           {!bookLoading && !book && (
-            <p className="text-sm text-muted">
-              Order book not yet initialized for this market.
-            </p>
+            // Pre-init state. Place + buy + sell instructions all fail
+            // here with the on-chain "AccountNotInitialized" error from
+            // the `seeds = [b"book", ...]` constraint in
+            // programs/meridian/src/instructions/place_order.rs, so we
+            // call this out plainly AND offer a repair affordance when
+            // the admin is signed in (the on-chain init_order_book is
+            // address-gated to the admin keypair, which lives on the
+            // automation server).
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-sm text-yellow-100">
+              <p className="font-semibold">Order book not yet initialized for this market.</p>
+              <p className="mt-1 text-xs text-yellow-200/80">
+                Mint Pair / Redeem Pair work without an order book, but Buy Yes, Sell Yes, Buy No, and Sell
+                No all require the book account to exist on-chain. Without it, those instructions revert at
+                account deserialization and the wallet shows &quot;Simulation failed&quot;.
+              </p>
+              {adminMode && (
+                <div className="mt-3 border-t border-yellow-500/20 pt-3">
+                  <button
+                    type="button"
+                    disabled={repairBusy}
+                    onClick={async () => {
+                      setRepairBusy(true);
+                      setRepairErr(null);
+                      setRepairResult(null);
+                      try {
+                        const result = await postInitOrderBook({ marketPubkey: market });
+                        setRepairResult(result);
+                        // Trigger an immediate refetch so the book panel
+                        // flips from "not initialized" to the empty-book
+                        // grid (bids: 0, asks: 0) the moment the tx
+                        // confirms, without waiting for the 2s
+                        // React Query interval.
+                        void queryClient.invalidateQueries({
+                          queryKey: queryKeys.orderBook(market),
+                        });
+                      } catch (err) {
+                        if (err instanceof AutomationApiError) {
+                          setRepairErr(
+                            `Init order book failed [${err.slug} / HTTP ${err.status}]: ${err.message}`,
+                          );
+                        } else {
+                          setRepairErr(
+                            err instanceof Error ? err.message : String(err),
+                          );
+                        }
+                      } finally {
+                        setRepairBusy(false);
+                      }
+                    }}
+                    className="w-full rounded-lg border border-accent/50 bg-accent/20 px-3 py-2 text-xs font-semibold text-accent hover:bg-accent/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    title="POSTs marketPubkey to the automation server's /admin/init-order-book endpoint, which calls init_order_book on-chain using the admin keypair. Idempotent."
+                  >
+                    {repairBusy ? "Initializing book — signing init_order_book…" : "Initialize order book (admin)"}
+                  </button>
+                  {repairResult && (
+                    <div className="mt-2 rounded-md border border-yes/40 bg-yes/10 p-2 text-[11px]">
+                      <p className="font-semibold text-yes">
+                        {repairResult.alreadyInitialized
+                          ? "Order book was already initialized; no transaction issued."
+                          : "Order book initialized."}
+                      </p>
+                      <p className="mt-0.5 font-mono text-text">book: {repairResult.bookPubkey}</p>
+                      {repairResult.sig && (
+                        <p className="mt-0.5">
+                          <a
+                            className="text-accent underline"
+                            href={explorerTxUrl(repairResult.sig)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View init_order_book tx on Solana Explorer →
+                          </a>
+                        </p>
+                      )}
+                      <p className="mt-1 text-muted">
+                        Trade buttons will become active as soon as the book panel refreshes
+                        (≤2 seconds).
+                      </p>
+                    </div>
+                  )}
+                  {repairErr && (
+                    <p className="mt-2 break-words rounded-md border border-no/40 bg-no/10 p-2 text-[11px] text-no">
+                      {repairErr}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[10px] text-muted">
+                    This calls the automation server&apos;s {`/admin/init-order-book`} endpoint. The admin
+                    keypair lives on that server; the browser never signs init_order_book directly.
+                  </p>
+                </div>
+              )}
+              {!adminMode && (
+                <p className="mt-2 text-[11px] text-yellow-200/70">
+                  Initialization requires the admin keypair (server-side). If this market is in the
+                  daily ladder it should be auto-initialized by the next morning cron; otherwise contact
+                  an operator.
+                </p>
+              )}
+            </div>
           )}
           {book && (
             <div className="grid grid-cols-2 gap-4">
@@ -722,7 +1068,7 @@ export default function TradePage({
                       <p className="mt-0.5">
                         <a
                           className="text-accent underline"
-                          href={`https://explorer.solana.com/tx/${settleResult.sig}?cluster=${cluster.name}`}
+                          href={explorerTxUrl(settleResult.sig)}
                           target="_blank"
                           rel="noreferrer"
                         >
@@ -780,10 +1126,18 @@ export default function TradePage({
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || holdsNo || isExpired}
+                disabled={!trade.ready || busy !== null || holdsNo || isExpired || bookUninitialized}
                 onClick={() => run("Buy Yes", () => trade.buyYes(priceTicks, qty), `+${qty} YES (resting bid at ${priceTicks}¢)`)}
                 className="w-full rounded-lg bg-yes/20 px-3 py-2 font-semibold text-yes hover:bg-yes/30 disabled:cursor-not-allowed disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-                title={isExpired ? "Market expired" : holdsNo ? "Sell your No position before buying Yes (PRD position constraint)" : ""}
+                title={
+                  isExpired
+                    ? "Market expired"
+                    : bookUninitialized
+                      ? "Order book PDA is not initialized for this market — see the panel on the left. Mint Pair / Redeem Pair still work, but order-book instructions revert until init_order_book has been called."
+                      : holdsNo
+                        ? "Sell your No position before buying Yes (PRD position constraint)"
+                        : ""
+                }
               >
                 {busy === "Buy Yes" ? "..." : "Buy Yes"}
               </button>
@@ -809,7 +1163,7 @@ export default function TradePage({
             </div>
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired}
+                disabled={!trade.ready || busy !== null || !bestBid || holdsYes || isExpired || bookUninitialized}
                 onClick={() =>
                   run(
                     "Buy No",
@@ -821,11 +1175,13 @@ export default function TradePage({
                 title={
                   isExpired
                     ? "Market expired"
-                    : holdsYes
-                      ? "Sell your Yes position before buying No (PRD position constraint)"
-                      : bestBid
-                        ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
-                        : "No bid available"
+                    : bookUninitialized
+                      ? "Order book PDA is not initialized for this market — see the panel on the left."
+                      : holdsYes
+                        ? "Sell your Yes position before buying No (PRD position constraint)"
+                        : bestBid
+                          ? `Will fill against bid @ ${formatUsdc(bestBid.priceUsd)}`
+                          : "No bid available"
                 }
               >
                 {busy === "Buy No" ? "..." : "Buy No"}
@@ -856,10 +1212,18 @@ export default function TradePage({
             </div>
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || !holdsYes || isExpired}
+                disabled={!trade.ready || busy !== null || !holdsYes || isExpired || bookUninitialized}
                 onClick={() => run("Sell Yes", () => trade.sellYes(priceTicks, qty), `−${qty} YES into escrow (limit ask ${priceTicks}¢)`)}
                 className="w-full rounded-lg border border-yes/40 bg-panel px-3 py-2 font-semibold text-yes hover:bg-yes/10 disabled:cursor-not-allowed disabled:border-panel disabled:bg-panel/40 disabled:text-muted disabled:opacity-60"
-                title={isExpired ? "Market expired" : !holdsYes ? "Need Yes tokens to sell" : ""}
+                title={
+                  isExpired
+                    ? "Market expired"
+                    : bookUninitialized
+                      ? "Order book PDA is not initialized for this market — see the panel on the left. The Sell Yes instruction reverts at AccountLoader<OrderBook> deserialization until init_order_book has been called."
+                      : !holdsYes
+                        ? "Need Yes tokens to sell"
+                        : ""
+                }
               >
                 {busy === "Sell Yes" ? "..." : "Sell Yes"}
               </button>
@@ -881,7 +1245,7 @@ export default function TradePage({
             </div>
             <div className="relative">
               <button
-                disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired}
+                disabled={!trade.ready || busy !== null || !bestAsk || !holdsNo || isExpired || bookUninitialized}
                 onClick={() =>
                   run(
                     "Sell No",
@@ -893,11 +1257,13 @@ export default function TradePage({
                 title={
                   isExpired
                     ? "Market expired"
-                    : !holdsNo
-                      ? "Need No tokens to sell"
-                      : bestAsk
-                        ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
-                        : "No ask available"
+                    : bookUninitialized
+                      ? "Order book PDA is not initialized for this market — see the panel on the left."
+                      : !holdsNo
+                        ? "Need No tokens to sell"
+                        : bestAsk
+                          ? `Will fill against ask @ ${formatUsdc(bestAsk.priceUsd)}`
+                          : "No ask available"
                 }
               >
                 {busy === "Sell No" ? "..." : "Sell No"}
