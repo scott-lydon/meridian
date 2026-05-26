@@ -271,8 +271,23 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-panel bg-bg/95 p-6 shadow-2xl">
-        <div className="mb-4 flex items-start justify-between gap-4">
+      <div
+        // max-h: 90vh + overflow-y: auto keeps the modal content
+        // bounded by the viewport. Without this the install-options
+        // list + multi-paragraph instructions block stretches past
+        // the screen edge and the close X at the bottom of the
+        // header (now sticky) becomes unreachable on shorter
+        // screens. Reported 2026-05-26 by a tester whose neighbor
+        // could not dismiss the picker. Also see the universal
+        // "consider scroll overflow on lengthy modal/popup content"
+        // rule in CLAUDE.md.
+        className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-panel bg-bg/95 shadow-2xl"
+      >
+        {/* Sticky header so the close X is always reachable, even
+            when the body content scrolls below it. p-6 + the
+            content-area's own p-6 (below) preserve the previous
+            visual spacing. */}
+        <div className="sticky top-0 z-10 flex flex-shrink-0 items-start justify-between gap-4 border-b border-panel/60 bg-bg/95 p-6 pb-4 backdrop-blur-sm">
           <h2 id="wallet-picker-title" className="text-lg font-semibold text-text">
             Connect a Solana wallet
           </h2>
@@ -285,6 +300,7 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
             ✕
           </button>
         </div>
+        <div className="flex-1 overflow-y-auto p-6 pt-4">
 
         {detected.length > 0 && (
           <section className="mb-5">
@@ -413,6 +429,7 @@ function WalletPickerModal({ onClose }: { onClose: () => void }) {
             reload this page and try again. Make sure the extension is unlocked.
           </p>
         </section>
+        </div>
       </div>
     </div>
   );

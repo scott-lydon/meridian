@@ -116,7 +116,7 @@ export function AfterHoursModeToggle() {
         <div
           role="dialog"
           aria-label="After-hours testing mode"
-          className="absolute right-0 z-30 mt-2 w-[min(22rem,calc(100vw-3rem))] rounded-2xl border border-panel bg-bg/95 p-4 text-sm shadow-2xl backdrop-blur-md"
+          className="absolute right-0 z-30 mt-2 max-h-[min(80vh,calc(100vh-5rem))] w-[min(22rem,calc(100vw-3rem))] overflow-y-auto overscroll-contain rounded-2xl border border-panel bg-bg/95 p-4 text-sm shadow-2xl backdrop-blur-md"
         >
           <div className="mb-3 flex items-start justify-between gap-3">
             <p className="font-semibold text-text">After-hours testing mode</p>
