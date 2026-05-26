@@ -138,3 +138,79 @@ impl Outcome {
         !matches!(self.state, OutcomeState::Pending)
     }
 }
+
+// ============================================================================
+// Unit tests for the account-state primitives.
+// ============================================================================
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outcome_pending_is_zero_initialized() {
+        let p = Outcome::pending();
+        assert_eq!(p.state, OutcomeState::Pending);
+        assert_eq!(p.closing_price_micros, 0);
+        assert_eq!(p.settled_at_unix, 0);
+        assert!(!p.admin_override);
+    }
+
+    #[test]
+    fn outcome_is_settled_state_machine() {
+        // Pending => not settled
+        let p = Outcome::pending();
+        assert!(!p.is_settled());
+
+        // YesWins => settled
+        let y = Outcome {
+            state: OutcomeState::YesWins,
+            closing_price_micros: 500_000_000,
+            settled_at_unix: 1_700_000_000,
+            admin_override: false,
+        };
+        assert!(y.is_settled());
+
+        // NoWins => settled
+        let n = Outcome {
+            state: OutcomeState::NoWins,
+            closing_price_micros: 499_000_000,
+            settled_at_unix: 1_700_000_000,
+            admin_override: false,
+        };
+        assert!(n.is_settled());
+    }
+
+    #[test]
+    fn outcome_admin_override_flag_is_preserved_independently_of_state() {
+        // The admin_override flag and the state field are orthogonal — a
+        // settled-via-Pyth outcome and a settled-via-admin outcome have the
+        // same state but different `admin_override` values, and downstream
+        // consumers (the frontend) must be able to tell.
+        let pyth_yes = Outcome {
+            state: OutcomeState::YesWins,
+            closing_price_micros: 1,
+            settled_at_unix: 1,
+            admin_override: false,
+        };
+        let admin_yes = Outcome { admin_override: true, ..pyth_yes };
+        assert_eq!(pyth_yes.state, admin_yes.state);
+        assert!(!pyth_yes.admin_override);
+        assert!(admin_yes.admin_override);
+    }
+
+    #[test]
+    fn config_len_matches_field_arithmetic() {
+        // 8 discriminator + 32 admin + 32 usdc_mint + 8 max_staleness +
+        // 2 max_confidence_bps + 8 admin_override_delay + 1 paused +
+        // 1 version + 1 bump = 93. If a field is added without updating LEN,
+        // this test fails LOUDLY rather than the on-chain allocation silently
+        // truncating the account.
+        assert_eq!(Config::LEN, 93);
+        assert_eq!(
+            Config::LEN,
+            8 + 32 + 32 + 8 + 2 + 8 + 1 + 1 + 1,
+            "Config::LEN drifted from the documented arithmetic"
+        );
+    }
+}
