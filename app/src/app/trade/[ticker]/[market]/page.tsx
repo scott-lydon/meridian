@@ -1165,10 +1165,38 @@ export default function TradePage({
             </div>
           )}
           {book && (
+            <>
+              {/* Plain-language legend.
+                  This book trades YES tokens against USD Coin only. There is no
+                  separate NO order book; NO is synthesized via the buy_no /
+                  sell_no instructions which mint-or-burn a pair and fill against
+                  the YES bid/ask side respectively. Users were misreading the
+                  red-coloured Asks column as "people offering NO" on
+                  2026-05-26 (real report). The legend below names each side in
+                  plain English so the column-color choice (green for the YES-
+                  buy side, red for the YES-sell side) can't be mistaken for a
+                  yes-vs-no token split. */}
+              <div className="mb-3 rounded-xl border border-panel/60 bg-bg/40 px-3 py-2 text-[11px] leading-relaxed text-muted">
+                <span className="font-semibold text-text">This book trades YES tokens only.</span>{" "}
+                <span className="text-yes">Bids</span> = wallets offering USD Coin to{" "}
+                <span className="text-yes">BUY YES</span>.{" "}
+                <span className="text-no">Asks</span> = wallets offering{" "}
+                <span className="text-no">to SELL YES</span> for USD Coin.{" "}
+                Both sides quote the same asset (one YES token); the price is what one YES costs in USD Coin.
+                <br />
+                <span className="text-muted/80">
+                  Want a NO instead? NO has no book of its own. Buying a NO mints a
+                  fresh YES + NO pair for $1.00 and immediately sells the YES into the
+                  top <span className="text-yes">Bid</span>; you keep the NO at net cost{" "}
+                  <span className="font-mono">$1.00 − bid_price</span>. So Buy No
+                  requires at least one <span className="text-yes">Bid</span> to be
+                  present, not an <span className="text-no">Ask</span>.
+                </span>
+              </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <h3 className="mb-2 text-xs uppercase text-yes flex items-baseline gap-2">
-                  <span>Bids</span>
+                <h3 className="mb-1 text-xs uppercase text-yes flex items-baseline gap-2">
+                  <span>Bids · buying YES</span>
                   {orderBookPda && (
                     // "See for yourself" link to the entire CLOB account
                     // on Solana Explorer. The OrderBook PDA is a single
@@ -1190,8 +1218,15 @@ export default function TradePage({
                     </a>
                   )}
                 </h3>
+                {/* Column sub-header. Names each numeric column so a user
+                    isn't guessing whether the second number is "price" or
+                    "quantity." Reads as "$ per YES · YES tokens" so a single
+                    glance pairs the column to its unit. */}
+                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">
+                  Price (USD Coin per YES) · Quantity (YES tokens)
+                </p>
                 {book.bids.length === 0 ? (
-                  <p className="text-sm text-muted">No bids.</p>
+                  <p className="text-sm text-muted">No bids. Buy No is disabled until at least one wallet posts a YES bid here.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.bids.slice(0, 10).map((b) => {
@@ -1255,8 +1290,8 @@ export default function TradePage({
                 )}
               </div>
               <div>
-                <h3 className="mb-2 text-xs uppercase text-no flex items-baseline gap-2">
-                  <span>Asks</span>
+                <h3 className="mb-1 text-xs uppercase text-no flex items-baseline gap-2">
+                  <span>Asks · selling YES</span>
                   {orderBookPda && (
                     <a
                       href={explorerAddressUrl(orderBookPda)}
@@ -1269,8 +1304,12 @@ export default function TradePage({
                     </a>
                   )}
                 </h3>
+                {/* Same column-unit hint as the bid side. */}
+                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">
+                  Price (USD Coin per YES) · Quantity (YES tokens)
+                </p>
                 {book.asks.length === 0 ? (
-                  <p className="text-sm text-muted">No asks.</p>
+                  <p className="text-sm text-muted">No asks. Sell No is disabled until at least one wallet posts a YES ask here.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.asks.slice(0, 10).map((a) => {
@@ -1329,6 +1368,7 @@ export default function TradePage({
                 )}
               </div>
             </div>
+            </>
           )}
         </div>
 
