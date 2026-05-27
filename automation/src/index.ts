@@ -53,11 +53,15 @@ const MORNING_CRON = "0 8 * * 1-5";
 const SETTLEMENT_CRON = "5 16 * * 1-5";
 // Match sweep — invokes the on-chain `match_orders` cranker for every
 // market with a crossed book. The cadence is the "how soon does my
-// limit fill against an existing resting order" knob. 5 seconds keeps
-// trade-fill UX snappy without spamming the RPC node (each tick reads
-// every market account once via `program.account.market.all()`, then
-// reads one OrderBook PDA per pending market). croner extended-cron
-// 6-field form, leading `*/5 * * * * *` = every 5 seconds.
+// limit fill against an existing resting order" knob. 1 second is the
+// minimum useful interval given Solana's ~400ms slot time: a tighter
+// schedule would not produce visibly faster fills because the tx still
+// has to wait for slot inclusion. Each tick reads every market account
+// once via `program.account.market.all()`, then reads one OrderBook PDA
+// per pending market. `protect: true` (set below on the croner Cron
+// instance) ensures a long tick will not overlap with the next one, so
+// a slow RPC pulse just means fewer ticks per minute, not piled-up work.
+// croner extended-cron 6-field form, leading `* * * * * *` = every second.
 //
 // Why this cron has to exist: `place_order` (the on-chain instruction)
 // only inserts into the slab; it never matches. The frontend `buyYes` /
@@ -66,7 +70,7 @@ const SETTLEMENT_CRON = "5 16 * * 1-5";
 // 2026-05-26 for market AAPL/3AL4SEZdBuJBo3BbBgRwzmxPmgaxfzNGJ1FJJrn7jmpD,
 // where a 50¢ bid and a 50¢ ask coexisted for 101+ hours). See
 // jobs/matchSweep.ts for the full rationale.
-const MATCH_SWEEP_CRON = "*/5 * * * * *";
+const MATCH_SWEEP_CRON = "* * * * * *";
 // Expiry sweep runs every 30 seconds, every day. The cadence is the
 // "how soon will my test market settle after expiry" knob. 30 seconds
 // keeps the interactive test feel responsive without spamming the RPC
@@ -375,11 +379,11 @@ const server = http.createServer((req, res) => {
   if (req.url === "/trigger/match") {
     // Manual trigger for the cross-the-book cranker. Sweeps every
     // pending market with both bids and asks and calls match_orders
-    // until uncrossed. Same idempotency guarantees as the 5-second
+    // until uncrossed. Same idempotency guarantees as the 1-second
     // cron — safe to call any number of times.
     //
     // Use case: an operator wants to unstick crossed orders RIGHT now
-    // without waiting up to 5 seconds for the next cron tick. Also
+    // without waiting up to 1 second for the next cron tick. Also
     // useful when the cron has been temporarily disabled and we want
     // to manually batch-match on a redeploy.
     runMatchSweep(env)
@@ -400,10 +404,10 @@ const server = http.createServer((req, res) => {
   // POST /admin/match-market with JSON body { marketPubkey: "...base58..." }
   // and headers x-admin-username: admin / x-admin-password: pass.
   //
-  // Why this exists: the 5-second `matchSweep` cron already cranks every
+  // Why this exists: the 1-second `matchSweep` cron already cranks every
   // crossed book, but operators (and the trade page's repair toast) need
   // a way to manually unstick one specific market RIGHT now without
-  // waiting up to 5 seconds, AND without paying the RPC cost of a full
+  // waiting up to 1 second, AND without paying the RPC cost of a full
   // sweep over every market. This is the single-market scalpel; the
   // /trigger/match endpoint is the broad sweep.
   //

@@ -30,10 +30,13 @@
 //
 // Cadence
 // -------
-// 5-second cron. UX latency for trade fills matters more than for
-// settlement (30s) or the morning ladder creation (once-a-day), so the
-// sweep tick has to be fast enough that a user clicking Buy Yes against an
-// existing ask sees the fill before they switch tabs.
+// 1-second cron (the floor for useful crank cadence on Solana given the
+// ~400ms slot time; tighter would not produce faster fills because every
+// match_orders tx still has to wait for slot inclusion). UX latency for
+// trade fills matters more than for settlement (30s) or the morning
+// ladder creation (once-a-day), so the sweep tick has to be fast enough
+// that a user clicking Buy Yes against an existing ask sees the fill
+// before they switch tabs.
 //
 // `croner.protect: true` is set in `index.ts` so two sweep ticks cannot
 // overlap; `match_orders` mutates the book and a race would either revert
@@ -209,7 +212,7 @@ export class MatchSweepError extends Error {
  * Iterate every market with a `pending` outcome, derive its order book
  * PDA, attempt to uncross the book by issuing `match_orders` repeatedly
  * until either (a) the book is no longer crossed or (b) the per-market
- * iteration cap is hit. Designed to be invoked on a 5-second croner
+ * iteration cap is hit. Designed to be invoked on a 1-second croner
  * schedule from `index.ts`.
  */
 export async function runMatchSweep(env: Env): Promise<MatchSweepResult> {
