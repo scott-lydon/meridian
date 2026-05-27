@@ -986,8 +986,38 @@ export default function TradePage({
 
       <section className="mb-10 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="col-span-2 rounded-2xl border border-panel bg-panel/40 p-5">
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted">
-            Order book (Yes/USDC)
+          {/* order-book-section-legend: the plain-language explanation
+              of what BIDS / ASKS mean on this YES-only book, and how a
+              NO is synthesized via mint-pair + IOC-sell. Was inline as
+              a four-line block in an earlier iteration; collapsed
+              behind this ⓘ on 2026-05-26 per user feedback that the
+              trade page had too much always-on explanatory text. */}
+          <h2 className="mb-3 flex items-center text-sm font-semibold uppercase tracking-wider text-muted">
+            <span>Order book (Yes/USDC)</span>
+            <InfoTip
+              title="What this book trades"
+              side="bottom"
+              className="text-muted normal-case tracking-normal"
+              ariaLabel="Open the order-book legend"
+            >
+              <p>
+                <span className="font-semibold text-text">This book trades YES tokens only.</span>{" "}
+                <span className="text-yes">Bids</span> are wallets offering USD Coin to{" "}
+                <span className="text-yes">BUY YES</span>;{" "}
+                <span className="text-no">Asks</span> are wallets offering to{" "}
+                <span className="text-no">SELL YES</span> for USD Coin. Both sides quote the
+                same asset (one YES token); the displayed price is what one YES costs in
+                USD Coin, the displayed quantity is YES tokens.
+              </p>
+              <p>
+                Want a <strong>NO</strong> instead? NO has no book of its own. Buying a NO
+                mints a fresh YES + NO pair for $1.00 and immediately sells the YES into the
+                top <span className="text-yes">Bid</span>; you keep the NO at net cost{" "}
+                <span className="font-mono">$1.00 − bid_price</span>. So Buy No requires
+                at least one <span className="text-yes">Bid</span> to be present, not an{" "}
+                <span className="text-no">Ask</span>.
+              </p>
+            </InfoTip>
           </h2>
           {bookLoading && <p className="text-muted">Loading book...</p>}
           {!bookLoading && !book && (
@@ -1161,33 +1191,13 @@ export default function TradePage({
           )}
           {book && (
             <>
-              {/* Plain-language legend.
-                  This book trades YES tokens against USD Coin only. There is no
-                  separate NO order book; NO is synthesized via the buy_no /
-                  sell_no instructions which mint-or-burn a pair and fill against
-                  the YES bid/ask side respectively. Users were misreading the
-                  red-coloured Asks column as "people offering NO" on
-                  2026-05-26 (real report). The legend below names each side in
-                  plain English so the column-color choice (green for the YES-
-                  buy side, red for the YES-sell side) can't be mistaken for a
-                  yes-vs-no token split. */}
-              <div className="mb-3 rounded-xl border border-panel/60 bg-bg/40 px-3 py-2 text-[11px] leading-relaxed text-muted">
-                <span className="font-semibold text-text">This book trades YES tokens only.</span>{" "}
-                <span className="text-yes">Bids</span> = wallets offering USD Coin to{" "}
-                <span className="text-yes">BUY YES</span>.{" "}
-                <span className="text-no">Asks</span> = wallets offering{" "}
-                <span className="text-no">to SELL YES</span> for USD Coin.{" "}
-                Both sides quote the same asset (one YES token); the price is what one YES costs in USD Coin.
-                <br />
-                <span className="text-muted/80">
-                  Want a NO instead? NO has no book of its own. Buying a NO mints a
-                  fresh YES + NO pair for $1.00 and immediately sells the YES into the
-                  top <span className="text-yes">Bid</span>; you keep the NO at net cost{" "}
-                  <span className="font-mono">$1.00 − bid_price</span>. So Buy No
-                  requires at least one <span className="text-yes">Bid</span> to be
-                  present, not an <span className="text-no">Ask</span>.
-                </span>
-              </div>
+              {/* The plain-language order-book legend was previously rendered
+                  inline as a four-line block above the columns. The
+                  2026-05-26 user feedback was that the trade page had too
+                  much visible explanatory text. Moved into the InfoTip
+                  popover attached to the ORDER BOOK section header
+                  (search the file for `order-book-section-legend`), so
+                  the legend is one click away rather than always-on. */}
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <h3 className="mb-1 text-xs uppercase text-yes flex items-baseline gap-2">
@@ -1213,15 +1223,13 @@ export default function TradePage({
                     </a>
                   )}
                 </h3>
-                {/* Column sub-header. Names each numeric column so a user
-                    isn't guessing whether the second number is "price" or
-                    "quantity." Reads as "$ per YES · YES tokens" so a single
-                    glance pairs the column to its unit. */}
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">
-                  Price (USD Coin per YES) · Quantity (YES tokens)
-                </p>
+                {/* Column sub-header removed 2026-05-26 — the unit hint
+                    ("price per YES · qty in YES tokens") now lives inside
+                    the order-book section's InfoTip popover. Empty-state
+                    copy shortened to a one-line "No bids." since the
+                    disabled Buy No button's ⓘ already explains why. */}
                 {book.bids.length === 0 ? (
-                  <p className="text-sm text-muted">No bids. Buy No is disabled until at least one wallet posts a YES bid here.</p>
+                  <p className="text-sm text-muted">No bids.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.bids.slice(0, 10).map((b) => {
@@ -1299,12 +1307,11 @@ export default function TradePage({
                     </a>
                   )}
                 </h3>
-                {/* Same column-unit hint as the bid side. */}
-                <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">
-                  Price (USD Coin per YES) · Quantity (YES tokens)
-                </p>
+                {/* Column sub-header / verbose empty state both removed
+                    on 2026-05-26 — see the matching comment on the Bids
+                    side. */}
                 {book.asks.length === 0 ? (
-                  <p className="text-sm text-muted">No asks. Sell No is disabled until at least one wallet posts a YES ask here.</p>
+                  <p className="text-sm text-muted">No asks.</p>
                 ) : (
                   <ul className="space-y-1 font-mono text-sm">
                     {book.asks.slice(0, 10).map((a) => {

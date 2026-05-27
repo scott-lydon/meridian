@@ -1,46 +1,52 @@
 "use client";
 
 /**
- * DisabledHint — small yellow ⓘ + one-line reason text rendered DIRECTLY
- * UNDERNEATH a disabled trade button.
+ * DisabledHint — small clickable yellow ⓘ icon rendered next to a
+ * disabled trade button. Click reveals the reason in a popover; the
+ * collapsed (icon-only) state is what the user sees by default so the
+ * trade panel stays uncluttered.
  *
- * Why this exists: the trade page used to show a single consolidated
- * "Why some buttons are disabled:" panel above the order book. The
- * panel listed every active reason in one block, which forced the
- * reader to mentally match each reason back to the button it referred
- * to. The 2026-05-26 user feedback was "consolidate the panel into a
- * yellow ⓘ underneath the unavailable buy no, sell no, etc." — i.e.
- * put the reason next to the button the user is actually looking at,
- * so the cause-effect link is visual not cognitive.
+ * Why this exists: an earlier version rendered the full reason inline
+ * as wrapped yellow text directly under each disabled button. With
+ * four buttons all disabled at once (the common Meridian state when a
+ * fresh wallet lands on an illiquid market) the trade panel grew an
+ * extra ~10 lines of yellow caveat text that pushed the actual buy /
+ * sell affordances below the fold. The 2026-05-26 user feedback was
+ * "you've got to collapse all these 'extra looking' texts. They are
+ * cluttering the ui." The fix: collapse the reason text behind a
+ * single click. The icon itself is unobtrusive (small, low-contrast
+ * border, opacity 70 until hover) so an enabled UI still scans
+ * cleanly while the affordance to learn WHY a specific button is
+ * disabled is one click away.
+ *
+ * Reuses the existing InfoTip primitive for the popover behavior
+ * (click outside / ESC to close, focus management, accessibility).
+ * The only visual difference is the yellow tint (`text-yellow-300`)
+ * which is the same hue used elsewhere for "constraint / caveat" UX
+ * so the icon reads as "there's a reason this is disabled" at a
+ * glance, distinct from the green / red mechanism-explanation icons
+ * already on every button.
  *
  * Behaviour:
  * - Renders NOTHING when `reason` is null / empty / undefined. Callers
  *   pass the reason unconditionally; this component handles the
- *   "button is enabled, no reason to show" branch internally so the
+ *   "button is enabled, no icon to show" branch internally so the
  *   call site stays free of `{reason && <DisabledHint .../>}` noise.
- * - Wraps in `text-yellow-200` on a transparent background so the hint
- *   reads as a caveat and not an action affordance. Tailwind utilities
- *   only (no custom CSS) so the bundle stays small and the theme
- *   follows the rest of the trade page.
- * - The ⓘ glyph is a plain Unicode INFORMATION SOURCE (U+24D8); no
- *   external icon dependency. It's purely decorative, so it carries
- *   aria-hidden so screen readers don't read "I" out loud before the
- *   actual reason text.
- *
- * Why a separate file: this component is reused under five buttons
- * (Buy Yes, Buy No, Sell Yes, Sell No, Mint Pair, Redeem Pair) and is
- * 100% presentational. Inlining six copies inside page.tsx would dwarf
- * the actual disabled-condition logic at each call site.
+ * - The popover opens BELOW the icon (side="bottom") because the
+ *   icon sits inside the trade panel which has ample room below but
+ *   often nothing above (top-row buttons are flush with the panel
+ *   header).
  */
+
+import { InfoTip } from "./InfoTip";
+
 export interface DisabledHintProps {
   /**
    * The one-line reason this button is currently disabled, OR null /
-   * undefined / empty string if the button is enabled. The string is
-   * what gets rendered next to the ⓘ; if it's falsy the component
-   * renders nothing. Keep it under ~120 characters so it fits on one
-   * line in the trade panel sidebar (Tailwind `text-[11px]` at the
-   * default trade-panel width fits ~110 chars per line; longer strings
-   * wrap which is OK but uglier).
+   * undefined / empty string if the button is enabled. Rendered inside
+   * the popover when the user clicks the ⓘ. Keep it under ~250
+   * characters; longer than that and the popover starts to lose its
+   * "tap to peek" affordance.
    */
   reason?: string | null;
 }
@@ -48,9 +54,13 @@ export interface DisabledHintProps {
 export function DisabledHint({ reason }: DisabledHintProps) {
   if (!reason) return null;
   return (
-    <div className="mt-1 flex items-start gap-1.5 text-[11px] leading-snug text-yellow-200/90">
-      <span aria-hidden className="select-none">ⓘ</span>
-      <span>{reason}</span>
-    </div>
+    <InfoTip
+      title="Why this is disabled"
+      side="bottom"
+      className="mt-1 text-yellow-300"
+      ariaLabel="Why is this button disabled?"
+    >
+      <p>{reason}</p>
+    </InfoTip>
   );
 }
