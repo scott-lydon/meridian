@@ -4,7 +4,7 @@ Binary stock outcome markets on Solana devnet. Trade tokens that pay `$1.00 USDC
 
 ## Demo video
 
-[Watch the 90-second walkthrough on YouTube](https://youtu.be/RWmlQbAvfMw)
+[Watch the walkthrough on YouTube](https://youtu.be/RWmlQbAvfMw)
 
 > **Status: slice 0 (bootstrap).** The four foundational artifacts and the workspace skeleton are in. Real instructions land in slice 1.
 
