@@ -4,18 +4,26 @@ This document is the audit trail for AI-assisted contributions to Meridian. It i
 
 ## Headline numbers
 
-- **108** total commits on `main` as of 2026-05-25.
-- **104** carry the `Assisted-by: Claude` trailer — **96.3%** of all commits.
+- **144** total commits on `main` as of 2026-05-27 (HEAD inclusive of this update).
+- **135** carry the `Assisted-by: Claude` trailer — **93.75%** of all commits.
 - **0** commits were generated without human review. Every commit was prompted, audited, and approved by the human author (Scott Lydon) before landing.
 
 Verify the trailer count yourself:
 
 ```bash
-git log --grep="Assisted-by" --oneline | wc -l   # → 104
-git log --oneline | wc -l                         # → 108
+git log --grep="Assisted-by" --oneline | wc -l   # → 135
+git log --oneline | wc -l                         # → 144
 ```
 
-The four commits without an explicit trailer are pre-trailer-policy bootstrap commits from the very first session; their content (workspace scaffold, license, README placeholder) is functionally equivalent to `pnpm create next-app` output and contains no business logic.
+If you read this file at a later HEAD, expect both counts to be higher; the ratio should stay above 90%.
+
+The nine commits without an explicit trailer break down as four pre-trailer-policy bootstrap commits from the very first session (workspace scaffold, license, README placeholder — functionally equivalent to `pnpm create next-app` output, no business logic) and five later commits where the trailer was simply not appended despite the policy. List them yourself:
+
+```bash
+git log --oneline --invert-grep --grep="Assisted-by"
+```
+
+The five missed-trailer commits are still AI-assisted (they were authored in the same Cowork / Claude Code sessions as the surrounding trailered commits); the trailer was a documentation omission, not a workflow change. All trailered or not, the same human-review gate applied.
 
 ## Tools used
 
