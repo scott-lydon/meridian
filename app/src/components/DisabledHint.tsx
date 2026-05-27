@@ -57,7 +57,7 @@ export function DisabledHint({ reason }: DisabledHintProps) {
     <InfoTip
       title="Why this is disabled"
       side="bottom"
-      className="mt-1 text-yellow-300"
+      className="text-yellow-300"
       ariaLabel="Why is this button disabled?"
     >
       <p>{reason}</p>

@@ -1270,7 +1270,7 @@ export default function TradePage({
                               href={explorerAddressUrl(b.owner)}
                               target="_blank"
                               rel="noreferrer"
-                              className="rounded bg-yes/10 px-2 py-0.5 font-mono text-[10px] text-yes/80 hover:bg-yes/20 hover:text-yes"
+                              className="rounded bg-yes/10 px-2 py-0.5 font-mono text-xs text-yes/80 hover:bg-yes/20 hover:text-yes"
                               title={`Open the maker wallet ${b.owner} on Solana Explorer.`}
                             >
                               maker {b.owner.slice(0, 4)}…{b.owner.slice(-4)} ↗
@@ -1347,7 +1347,7 @@ export default function TradePage({
                               href={explorerAddressUrl(a.owner)}
                               target="_blank"
                               rel="noreferrer"
-                              className="rounded bg-no/10 px-2 py-0.5 font-mono text-[10px] text-no/80 hover:bg-no/20 hover:text-no"
+                              className="rounded bg-no/10 px-2 py-0.5 font-mono text-xs text-no/80 hover:bg-no/20 hover:text-no"
                               title={`Open the maker wallet ${a.owner} on Solana Explorer.`}
                             >
                               maker {a.owner.slice(0, 4)}…{a.owner.slice(-4)} ↗
@@ -1611,10 +1611,15 @@ export default function TradePage({
               >
                 {busy === "Buy Yes" ? "..." : "Buy Yes"}
               </button>
+              {/* Single flex row holds both ⓘ icons (mechanism + disabled
+                  reason) directly under the button. Same vertical
+                  position for every button so the row scans cleanly
+                  across the 2x2 grid. */}
+              <div className="mt-1.5 flex items-center gap-2 px-1">
               <InfoTip
                 title="How Buy Yes works"
                 side="top"
-                className="absolute right-1.5 top-1.5 text-yes"
+                className="text-yes"
               >
                 {m && m.outcome === "Pending" && (
                   <p className="rounded bg-yes/10 px-2 py-1.5 text-text">
@@ -1640,6 +1645,7 @@ export default function TradePage({
                 </p>
               </InfoTip>
               <DisabledHint reason={buyYesDisabledReason} />
+              </div>
             </div>
             <div className="relative">
               <button
@@ -1668,10 +1674,11 @@ export default function TradePage({
               >
                 {busy === "Buy No" ? "..." : "Buy No"}
               </button>
+              <div className="mt-1.5 flex items-center gap-2 px-1">
               <InfoTip
                 title="How Buy No actually works"
                 side="top"
-                className="absolute right-1.5 top-1.5 text-no"
+                className="text-no"
               >
                 {m && m.outcome === "Pending" && (
                   <p className="rounded bg-no/10 px-2 py-1.5 text-text">
@@ -1702,6 +1709,7 @@ export default function TradePage({
                 </p>
               </InfoTip>
               <DisabledHint reason={buyNoDisabledReason} />
+              </div>
             </div>
             <div className="relative">
               <button
@@ -1720,10 +1728,11 @@ export default function TradePage({
               >
                 {busy === "Sell Yes" ? "..." : "Sell Yes"}
               </button>
+              <div className="mt-1.5 flex items-center gap-2 px-1">
               <InfoTip
                 title="How Sell Yes works"
                 side="bottom"
-                className="absolute right-1.5 top-1.5 text-yes"
+                className="text-yes"
               >
                 <p>
                   Posts a resting limit <strong>ASK</strong> on the YES order book at your chosen price.
@@ -1736,6 +1745,7 @@ export default function TradePage({
                 </p>
               </InfoTip>
               <DisabledHint reason={sellYesDisabledReason} />
+              </div>
             </div>
             <div className="relative">
               <button
@@ -1764,10 +1774,11 @@ export default function TradePage({
               >
                 {busy === "Sell No" ? "..." : "Sell No"}
               </button>
+              <div className="mt-1.5 flex items-center gap-2 px-1">
               <InfoTip
                 title="How Sell No actually works"
                 side="bottom"
-                className="absolute right-1.5 top-1.5 text-no"
+                className="text-no"
               >
                 <p>
                   <strong>There is no separate NO order book.</strong> Sell No is the atomic{" "}
@@ -1789,6 +1800,7 @@ export default function TradePage({
                 </p>
               </InfoTip>
               <DisabledHint reason={sellNoDisabledReason} />
+              </div>
             </div>
           </div>
 
