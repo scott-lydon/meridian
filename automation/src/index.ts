@@ -22,6 +22,11 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { buildAnchor } from "./lib/anchor.js";
 import { ensureOrderBook, EnsureOrderBookError } from "./jobs/ensureOrderBook.js";
+import {
+  runMatchSweep,
+  runMatchOneMarket,
+  MatchSweepError,
+} from "./jobs/matchSweep.js";
 
 const env = loadEnv();
 const startedAt = new Date().toISOString();
@@ -41,10 +46,27 @@ interface CronRunRecord {
 let lastMorningRun: CronRunRecord | null = null;
 let lastSettlementRun: CronRunRecord | null = null;
 let lastExpirySweepRun: CronRunRecord | null = null;
+let lastMatchSweepRun: CronRunRecord | null = null;
 
 // Cron schedules in America/New_York. croner has sub-100ms drift.
 const MORNING_CRON = "0 8 * * 1-5";
 const SETTLEMENT_CRON = "5 16 * * 1-5";
+// Match sweep — invokes the on-chain `match_orders` cranker for every
+// market with a crossed book. The cadence is the "how soon does my
+// limit fill against an existing resting order" knob. 5 seconds keeps
+// trade-fill UX snappy without spamming the RPC node (each tick reads
+// every market account once via `program.account.market.all()`, then
+// reads one OrderBook PDA per pending market). croner extended-cron
+// 6-field form, leading `*/5 * * * * *` = every 5 seconds.
+//
+// Why this cron has to exist: `place_order` (the on-chain instruction)
+// only inserts into the slab; it never matches. The frontend `buyYes` /
+// `sellYes` only sends `place_order`. Until this cron was added, every
+// crossing order pair sat in the book unfilled (the failure reported on
+// 2026-05-26 for market AAPL/3AL4SEZdBuJBo3BbBgRwzmxPmgaxfzNGJ1FJJrn7jmpD,
+// where a 50¢ bid and a 50¢ ask coexisted for 101+ hours). See
+// jobs/matchSweep.ts for the full rationale.
+const MATCH_SWEEP_CRON = "*/5 * * * * *";
 // Expiry sweep runs every 30 seconds, every day. The cadence is the
 // "how soon will my test market settle after expiry" knob. 30 seconds
 // keeps the interactive test feel responsive without spamming the RPC
@@ -125,15 +147,43 @@ const expirySweepJob = new Cron(
   },
 );
 
+// Match sweep — every 5 seconds, calls match_orders on every crossed
+// book. See MATCH_SWEEP_CRON above for the full rationale. Same WTF
+// guard as the other crons: croner unmounts the cron on throw, so we
+// MUST swallow exceptions here. lastMatchSweepRun captures the error so
+// /health is self-diagnosing without a log scan.
+//
+// `protect: true` prevents two concurrent ticks. match_orders mutates
+// the shared OrderBook slab; a race between two cranker invocations
+// would either revert (account-version mismatch) or, worse, pay a maker
+// twice if the program's idempotency check ever regressed. Better to
+// skip a tick than to race.
+const matchSweepJob = new Cron(
+  MATCH_SWEEP_CRON,
+  { timezone: env.TZ, name: "matchSweep", protect: true },
+  async () => {
+    try {
+      const result = await runMatchSweep(env);
+      lastMatchSweepRun = { at: new Date().toISOString(), result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastMatchSweepRun = { at: new Date().toISOString(), error: message };
+      logger.error({ err: message }, "match sweep job threw");
+    }
+  },
+);
+
 logger.info(
   {
     morning: MORNING_CRON,
     settlement: SETTLEMENT_CRON,
     expirySweep: EXPIRY_SWEEP_CRON,
+    matchSweep: MATCH_SWEEP_CRON,
     tz: env.TZ,
     morningNext: morningJob.nextRun()?.toISOString(),
     settlementNext: settlementJob.nextRun()?.toISOString(),
     expirySweepNext: expirySweepJob.nextRun()?.toISOString(),
+    matchSweepNext: matchSweepJob.nextRun()?.toISOString(),
   },
   "crons scheduled",
 );
@@ -267,9 +317,11 @@ const server = http.createServer((req, res) => {
         lastMorningRun,
         lastSettlementRun,
         lastExpirySweepRun,
+        lastMatchSweepRun,
         morningNext: morningJob.nextRun()?.toISOString() ?? null,
         settlementNext: settlementJob.nextRun()?.toISOString() ?? null,
         expirySweepNext: expirySweepJob.nextRun()?.toISOString() ?? null,
+        matchSweepNext: matchSweepJob.nextRun()?.toISOString() ?? null,
         cluster: env.SOLANA_CLUSTER,
       }),
     );
@@ -318,6 +370,66 @@ const server = http.createServer((req, res) => {
         res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: String(err) }));
       });
+    return;
+  }
+  if (req.url === "/trigger/match") {
+    // Manual trigger for the cross-the-book cranker. Sweeps every
+    // pending market with both bids and asks and calls match_orders
+    // until uncrossed. Same idempotency guarantees as the 5-second
+    // cron — safe to call any number of times.
+    //
+    // Use case: an operator wants to unstick crossed orders RIGHT now
+    // without waiting up to 5 seconds for the next cron tick. Also
+    // useful when the cron has been temporarily disabled and we want
+    // to manually batch-match on a redeploy.
+    runMatchSweep(env)
+      .then((r) => {
+        lastMatchSweepRun = { at: new Date().toISOString(), result: r };
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(r));
+      })
+      .catch((err: unknown) => {
+        logger.error({ err: String(err) }, "manual match-sweep trigger failed");
+        res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: String(err) }));
+      });
+    return;
+  }
+  // ===== Admin-only: match a single market's order book on demand. =====
+  //
+  // POST /admin/match-market with JSON body { marketPubkey: "...base58..." }
+  // and headers x-admin-username: admin / x-admin-password: pass.
+  //
+  // Why this exists: the 5-second `matchSweep` cron already cranks every
+  // crossed book, but operators (and the trade page's repair toast) need
+  // a way to manually unstick one specific market RIGHT now without
+  // waiting up to 5 seconds, AND without paying the RPC cost of a full
+  // sweep over every market. This is the single-market scalpel; the
+  // /trigger/match endpoint is the broad sweep.
+  //
+  // Same admin/pass auth as /admin/create-market; same CORS posture.
+  if (req.url === "/admin/match-market" && req.method === "OPTIONS") {
+    res.writeHead(204, {
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "POST, OPTIONS",
+      "access-control-allow-headers": "content-type, x-admin-username, x-admin-password",
+      "access-control-max-age": "600",
+    });
+    res.end();
+    return;
+  }
+  if (req.url === "/admin/match-market" && req.method === "POST") {
+    handleMatchMarket(req, res).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error({ err: message }, "/admin/match-market top-level error");
+      if (!res.headersSent) {
+        res.writeHead(500, {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+        });
+        res.end(JSON.stringify({ error: "internal", message }));
+      }
+    });
     return;
   }
   // ===== Admin-only: create a custom market on demand. =====
@@ -844,6 +956,147 @@ async function handleInitOrderBook(
   }
 }
 
+/**
+ * Handle POST /admin/match-market. Streams the body, parses, authorizes,
+ * runs the single-market match cranker, returns a JSON result.
+ *
+ * Response shape (200):
+ *   {
+ *     market: string,           // base58 of the market we matched
+ *     matchesIssued: number,    // count of match_orders ix's sent
+ *     crossedAtStart: boolean,  // whether the book was crossed on entry
+ *     stillCrossed: boolean,    // true if we ran out of iterations
+ *   }
+ *
+ * Error mapping:
+ *   - missing/wrong x-admin-username + x-admin-password headers -> 401
+ *   - invalid JSON body or missing marketPubkey -> 400
+ *   - MatchSweepError.code MARKET_NOT_FOUND -> 404
+ *   - MatchSweepError.code ORDER_BOOK_MISSING -> 409 (book PDA absent;
+ *     caller should hit /admin/init-order-book first)
+ *   - MatchSweepError.code BOOK_DECODE_FAILED -> 500 (IDL drift)
+ *   - MatchSweepError.code MATCH_TX_FAILED -> 502 (upstream Solana)
+ *   - anything else -> 500
+ *
+ * Same admin/pass auth shape as the sibling handlers above; same
+ * "not a real security boundary" rationale (the real gate is the on-
+ * chain account constraints — there is NO admin-only constraint on
+ * match_orders itself, which is intentionally permissionless, but the
+ * automation keypair pays for the maker ATA rent and that posture is
+ * what this header pair gates).
+ */
+async function handleMatchMarket(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): Promise<void> {
+  const corsHeaders = { "access-control-allow-origin": "*" } as const;
+  const send = (status: number, body: object): void => {
+    res.writeHead(status, { "content-type": "application/json", ...corsHeaders });
+    res.end(JSON.stringify(body));
+  };
+
+  const headerUser = req.headers["x-admin-username"];
+  const headerPass = req.headers["x-admin-password"];
+  const username = Array.isArray(headerUser) ? headerUser[0] : headerUser;
+  const password = Array.isArray(headerPass) ? headerPass[0] : headerPass;
+  if (username !== ADMIN_USERNAME || password !== ADMIN_PASSWORD) {
+    send(401, {
+      error: "unauthorized",
+      message:
+        "missing or invalid x-admin-username + x-admin-password headers. " +
+        "Sign in at /admin on the frontend first; the page picks up the " +
+        "credentials from localStorage and includes them automatically.",
+    });
+    return;
+  }
+
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer);
+    if (chunks.reduce((s, c) => s + c.length, 0) > 8 * 1024) {
+      send(413, {
+        error: "body_too_large",
+        message: "request body exceeded 8KB; expected a small JSON object",
+      });
+      return;
+    }
+  }
+  const bodyStr = Buffer.concat(chunks).toString("utf8");
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyStr);
+  } catch (err) {
+    send(400, {
+      error: "invalid_json",
+      message: `request body is not valid JSON: ${String(err)}`,
+    });
+    return;
+  }
+  if (typeof body !== "object" || body === null) {
+    send(400, {
+      error: "invalid_body_shape",
+      message: "request body must be a JSON object",
+    });
+    return;
+  }
+  const { marketPubkey } = body as Record<string, unknown>;
+  if (
+    typeof marketPubkey !== "string" ||
+    marketPubkey.length < 32 ||
+    marketPubkey.length > 44
+  ) {
+    send(400, {
+      error: "missing_field",
+      message:
+        "field 'marketPubkey' is required, must be a base58-encoded Solana account address (32-44 chars). " +
+        "Got: " +
+        JSON.stringify(marketPubkey),
+    });
+    return;
+  }
+  let marketKey: PublicKey;
+  try {
+    marketKey = new PublicKey(marketPubkey);
+  } catch (err) {
+    send(400, {
+      error: "invalid_pubkey",
+      message: `field 'marketPubkey' is not a valid base58 Solana pubkey: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    });
+    return;
+  }
+
+  try {
+    const result = await runMatchOneMarket(env, marketKey);
+    logger.info({ result }, "/admin/match-market succeeded");
+    send(200, result);
+    return;
+  } catch (err) {
+    if (err instanceof MatchSweepError) {
+      if (err.code === "MARKET_NOT_FOUND") {
+        send(404, { error: "market_not_found", message: err.message });
+        return;
+      }
+      if (err.code === "ORDER_BOOK_MISSING") {
+        send(409, { error: "order_book_missing", message: err.message });
+        return;
+      }
+      if (err.code === "BOOK_DECODE_FAILED") {
+        send(500, { error: "book_decode_failed", message: err.message });
+        return;
+      }
+      if (err.code === "MATCH_TX_FAILED") {
+        send(502, { error: "match_tx_failed", message: err.message });
+        return;
+      }
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err: message }, "/admin/match-market unexpected error");
+    send(500, { error: "unexpected", message });
+  }
+}
+
 server.listen(env.PORT, () => {
   logger.info({ port: env.PORT }, "meridian automation listening");
 });
@@ -854,6 +1107,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     morningJob.stop();
     settlementJob.stop();
     expirySweepJob.stop();
+    matchSweepJob.stop();
     server.close(() => process.exit(0));
   });
 }

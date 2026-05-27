@@ -199,4 +199,81 @@ seeder cron to repopulate; see `automation/src/jobs/ensureOrderBook.ts`.
 
 ---
 
-## 5. (template — add as we find them)
+## 5. Every CLOB instruction that *changes state* needs a paired cron that *drives it*
+
+**Symptom seen 2026-05-26:** market AAPL strike $280 expired 101+ hours
+earlier, awaiting settlement. The book showed a `$0.50` bid (the user's
+own) and a `$0.50` ask (from maker `EfQh…2dNe`). The user reasonably
+expected the bid to fill against the existing ask; instead BOTH orders
+rested in the book indefinitely. Phantom showed both signatures as
+confirmed, no on-chain error.
+
+**Root cause:** the on-chain CLOB is a TWO-instruction design. `place_order`
+in `programs/meridian/src/instructions/place_order.rs` only *inserts*
+into the slab and returns; matching is a SEPARATE `match_orders`
+instruction in `programs/meridian/src/instructions/match_orders.rs`
+that has to be called by an external cranker. The frontend
+`buyYes` / `sellYes` flow at `app/src/hooks/useTrade.ts:610` and
+`app/src/hooks/useTrade.ts:649` sends `place_order` only. Until the fix
+shipped, the automation service (`automation/src/index.ts`) ran THREE
+crons (`morning`, `settlement`, `expirySweep`) — none of which call
+`match_orders`. The only `program.methods.matchOrders()` call in the
+entire repo was in `tests/meridian.test.ts:552`. The trade-page
+tooltip at `app/src/app/trade/[ticker]/[market]/page.tsx:1638-1640`
+promised "fills … via match_orders (usually within one ~400ms slot)",
+which set a UX expectation that the actual production runtime did not
+satisfy.
+
+**Why a grep didn't catch this earlier:** the `matchOrders` symbol was
+present in `app/src/idl/meridian.ts`, `app/src/idl/meridian.json`, and
+the on-chain Rust source — the IDL exports a callable handle, the
+on-chain handler exists. Looking at any of those in isolation, the
+feature *appears* to work. The absent piece is the *invocation*, which
+shows up as an absence, not a positive signal.
+
+**The fix:** added `automation/src/jobs/matchSweep.ts` plus a 5-second
+cron (`MATCH_SWEEP_CRON = "*/5 * * * * *"`) in `automation/src/index.ts`
+that iterates every pending market, derives its order book PDA, and
+calls `match_orders` until uncrossed. Plus a manual
+`/admin/match-market` endpoint so operators can unstick one specific
+market without waiting for the next tick.
+
+**Preventive checklist — apply on every new on-chain instruction:**
+
+1. **Two-question test before merging the instruction.** (a) Does this
+   instruction *insert into* shared state that needs to be later
+   *processed*? (b) If so, which production process processes it? If
+   the answer to (b) is "the cranker / the cron / the sweep" and that
+   process is not listed in `automation/src/index.ts`'s top-of-file
+   import block, you have NOT shipped the instruction — you have
+   shipped a half-instruction. Add the cron in the same PR.
+
+2. **Tooltip / docs claim → cron exists.** Any UI copy that says "the
+   cranker matches", "automatically settles", "is processed within X
+   seconds" must point to a specific function name imported in
+   `automation/src/index.ts`. If a grep for that function name on
+   `automation/src/index.ts` returns nothing, the claim is a lie. The
+   constitution's no-stub-data rule applies to runtime claims, not just
+   data values.
+
+3. **Pair every UI button to an end-to-end test that asserts settlement
+   semantics, not just on-chain-acceptance.** The current test pattern
+   is `await program.methods.placeOrder(...).rpc()` followed by
+   `expect(book.bidsLen).toBe(1)`. That asserts the order was placed,
+   not that it was matched. Add an assertion shape like: after placing
+   a crossing pair, *trigger the production code path that should match
+   it* (not a direct `matchOrders()` test call) and assert the book is
+   uncrossed. This is the test that would have caught the missing
+   cranker before users did.
+
+4. **The `/health` endpoint surfaces every cron's `lastRun` AND `next`.**
+   When a cron is missing, `lastRun` stays `null` forever. The
+   `automation/src/index.ts` health response now includes
+   `lastMatchSweepRun` + `matchSweepNext` alongside the existing
+   morning / settlement / expirySweep fields. Audit pages that render
+   `/health` will surface a NEW cron as "never ran" the moment it's
+   added but not running, instead of silently omitting it.
+
+---
+
+## 6. (template — add as we find them)
