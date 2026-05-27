@@ -1,4 +1,4 @@
-// scripts/seed-devnet.mjs
+// tests/seed-devnet.mjs
 //
 // End-to-end smoke against the LIVE devnet program. Idempotent: re-running
 // skips work that already landed. Each step logs the tx signature with the
@@ -12,8 +12,18 @@
 //   5. place_order Bid at $0.45 qty 2.
 //   6. place_order Ask at $0.55 qty 2.
 //
-// Run from tests/ so @coral-xyz/anchor + @solana/spl-token resolve:
-//   cd tests && node /Users/scottlydon/Desktop/Clutter/iOS/meridian/scripts/seed-devnet.mjs
+// HOW TO RUN: invoke node with the path to THIS file. Node resolves
+// @coral-xyz/anchor + @solana/spl-token from the SCRIPT'S directory
+// (tests/), not from cwd. All three of these work:
+//
+//   pnpm seed:devnet                                # repo-root npm script
+//   node tests/seed-devnet.mjs                      # from repo root
+//   node /full/path/to/tests/seed-devnet.mjs        # from anywhere
+//
+// Prior failure mode: this file used to live at scripts/seed-devnet.mjs
+// which had no node_modules, so invoking it from tests/ still failed with
+// ERR_MODULE_NOT_FOUND because cwd is irrelevant to ES-module bare-import
+// resolution. The file was moved to tests/ to fix that once and for all.
 
 import * as anchor from "@coral-xyz/anchor";
 const BN = anchor.BN || anchor.default?.BN;

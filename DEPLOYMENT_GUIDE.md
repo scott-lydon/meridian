@@ -72,7 +72,7 @@ What that runs under the hood:
 anchor build
 anchor deploy --provider.cluster devnet --provider.wallet keypairs/admin.json
 node scripts/init-config.mjs                   # calls initialize_config
-node scripts/seed-devnet.mjs                   # creates the seven daily markets
+node tests/seed-devnet.mjs                     # creates the seven daily markets (was scripts/, moved to tests/ so node_modules resolves)
 ```
 
 The program id is checked in at `Anchor.toml`. If you redeploy to a fresh address you must update:

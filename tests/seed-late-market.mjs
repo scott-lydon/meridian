@@ -1,26 +1,29 @@
-// scripts/seed-late-market.mjs
+// tests/seed-late-market.mjs
 //
 // Create a fresh on-chain market with a FUTURE expiry, plus an initialized
 // order book seeded with one bid and one ask. Companion to
-// scripts/seed-devnet.mjs but tuned for after-hours testing — the existing
+// tests/seed-devnet.mjs but tuned for after-hours testing — the existing
 // seed script hard-codes expiry to 16:00 ET TODAY, which makes the market
 // instantly past-expiry if you run it after market close.
 //
-// Same on-chain instructions as seed-devnet.mjs (create_strike_market,
+// Same on-chain instructions as tests/seed-devnet.mjs (create_strike_market,
 // init_order_book, mint_pair, place_order). Nothing about the transactions
 // is mocked or simulated — this is real devnet state. The only difference
 // is the expiry value passed to create_strike_market.
 //
-// Usage:
+// HOW TO RUN: invoke node with the path to THIS file. Node resolves
+// @coral-xyz/anchor + @solana/spl-token from the SCRIPT'S directory
+// (tests/), not from cwd.
 //
 //   # default: expiry = now + 24h, strike = $250 NVDA
-//   node scripts/seed-late-market.mjs
+//   pnpm seed:late                                  # repo-root npm script
+//   node tests/seed-late-market.mjs                 # from repo root
 //
 //   # custom expiry window:
-//   EXPIRY_HOURS=48 node scripts/seed-late-market.mjs
+//   EXPIRY_HOURS=48 node tests/seed-late-market.mjs
 //
 //   # custom ticker / strike:
-//   TICKER=AAPL STRIKE_USD=200 node scripts/seed-late-market.mjs
+//   TICKER=AAPL STRIKE_USD=200 node tests/seed-late-market.mjs
 //
 // Outputs:
 //   - Solana Explorer links for the market PDA and each tx

@@ -57,7 +57,7 @@ The seeding script is idempotent and does all four prerequisite steps. From `scr
 
 | Step | Actor | Action | On-chain effect | Verify |
 |---|---|---|---|---|
-| A.1.1 | Account 1 | `cd ~/Desktop/Clutter/iOS/meridian/tests && node ../scripts/seed-devnet.mjs` | If today's NVDA > $250 market does not exist, calls `create_strike_market` (admin only). Then `init_order_book`, `mint_pair(5)`, `place_order(Bid, price_ticks=45, qty=2)`, `place_order(Ask, price_ticks=55, qty=2)`. | Script prints six Explorer URLs (or "(skipped, already exists)" for the idempotent ones). Final book state: Bid 45¢ qty 2 / Ask 55¢ qty 2. |
+| A.1.1 | Account 1 | `cd ~/Desktop/Clutter/iOS/meridian && node tests/seed-devnet.mjs` | If today's NVDA > $250 market does not exist, calls `create_strike_market` (admin only). Then `init_order_book`, `mint_pair(5)`, `place_order(Bid, price_ticks=45, qty=2)`, `place_order(Ask, price_ticks=55, qty=2)`. | Script prints six Explorer URLs (or "(skipped, already exists)" for the idempotent ones). Final book state: Bid 45¢ qty 2 / Ask 55¢ qty 2. |
 
 You can also seed a heavier book by re-running the script and editing the qty constants, or by running it more than once (each run mints 5 more pairs and posts 2 more on each side, stacking depth at the same price levels).
 
