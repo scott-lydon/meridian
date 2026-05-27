@@ -313,6 +313,38 @@ export function MeridianProviders({ children }: { readonly children: ReactNode }
       return;
     }
 
+    // Filter out the transient `WalletNotSelectedError` (root-caused
+    // 2026-05-27 from a user video showing the red "Wallet didn't
+    // connect" banner appearing AT THE SAME TIME the wallet was
+    // visibly connected in the header).
+    //
+    // The WalletPicker's `onPickWallet` calls `select(name)` then —
+    // after a defensive 50ms sleep against the 2026-05-22 silent-click
+    // bug — explicitly awaits `connect()`. The 50ms sleep is sometimes
+    // shorter than the React state propagation that turns the named
+    // selection into a non-null `wallet` ref on the underlying
+    // adapter, so the explicit `connect()` runs while the adapter
+    // still sees `wallet === null`. The adapter throws
+    // `WalletNotSelectedError` synchronously AND emits an error event
+    // that the wallet-adapter-react's onError prop forwards to us. By
+    // the time the banner renders, autoConnect's own useEffect has
+    // ALREADY started the real connection: the user sees their pubkey
+    // in the header while a giant red "Wallet didn't connect" banner
+    // covers half the page. Maximally confusing.
+    //
+    // The error is purely a developer-facing race signal between the
+    // two redundant connect entry points. It is never actionable for
+    // the user, and the actual connect either succeeds (most of the
+    // time) or fails with a different, accurate error (WalletNotReady,
+    // WalletWindowClosed, WalletConnection). Drop it on the floor.
+    //
+    // Name-based match (same robustness justification as the
+    // send/sign filter above: pnpm hoists multiple copies of
+    // `@solana/wallet-adapter-base`, so `instanceof` is flaky).
+    if (err.name === "WalletNotSelectedError") {
+      return;
+    }
+
     setWalletErrorMsg(describeWalletError(err));
   }, []);
 
