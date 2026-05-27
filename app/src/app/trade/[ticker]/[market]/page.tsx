@@ -839,21 +839,29 @@ export default function TradePage({
               </span>
             )}
           </div>
-          {/* Companion line that names the on-chain mints so the user can
-              also inspect the SUPPLY of YES vs NO across all wallets — that
-              is, the open interest of this market. Smaller / muted because
-              it is an advanced affordance, not the primary signal. */}
+          {/* Companion line that links each side's SPL token mint ACCOUNT on
+              Solana Explorer so the user can inspect total supply (the open
+              interest of this market across all wallets). The previous label
+              ("YES mint / NO mint") read as a verb ("mint YES tokens"), but
+              the Meridian program only mints YES + NO together via
+              `mint_pair` in programs/meridian/src/lib.rs — there is no
+              single-side mint instruction, so a verb reading would imply an
+              action that does not exist. These are READ-ONLY navigation
+              links; the rewritten label ("YES supply ↗ / NO supply ↗")
+              and tooltip make both the read-only nature and the pair
+              invariant explicit. Smaller / muted because it is an advanced
+              affordance, not the primary signal. */}
           {userTokenAtas && (userYesBal > 0n || userNoBal > 0n) && (
             <p className="text-[11px] text-muted">
-              Mints:{" "}
+              Open interest (total supply):{" "}
               <a
                 href={explorerAddressUrl(userTokenAtas.yesMint)}
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-accent underline decoration-accent/40 hover:text-accentHover"
-                title="Open the YES mint on Solana Explorer to see total supply (open interest) and every holder."
+                title="View the YES token mint account on Solana Explorer. Its total supply equals the total YES outstanding across all wallets (open interest on the YES side). Read-only link — Meridian only mints YES and NO together via mint_pair, so there is no single-side mint action."
               >
-                YES mint
+                YES supply ↗
               </a>
               {" · "}
               <a
@@ -861,9 +869,9 @@ export default function TradePage({
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-accent underline decoration-accent/40 hover:text-accentHover"
-                title="Open the NO mint on Solana Explorer to see total supply (open interest) and every holder."
+                title="View the NO token mint account on Solana Explorer. Its total supply equals the total NO outstanding across all wallets (open interest on the NO side). Read-only link — Meridian only mints YES and NO together via mint_pair, so there is no single-side mint action."
               >
-                NO mint
+                NO supply ↗
               </a>
             </p>
           )}
