@@ -3,8 +3,7 @@
 Binary stock outcome markets on Solana devnet. Trade tokens that pay `$1.00 USDC` if a MAG7 stock closes at or above a strike price today, and `$0.00` otherwise. Non-custodial. On-chain order book. Pyth oracle settlement at 16:00 ET. No KYC, no margin, no custody.
 
 ## Demo video
-
-[Watch the walkthrough on YouTube](https://youtu.be/RWmlQbAvfMw)
+[Watch the walkthrough on YouTube](https://youtu.be/y97kLzmOowg)
 
 > **Status: slice 0 (bootstrap).** The four foundational artifacts and the workspace skeleton are in. Real instructions land in slice 1.
 
