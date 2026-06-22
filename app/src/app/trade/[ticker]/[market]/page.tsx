@@ -453,10 +453,11 @@ export default function TradePage({
 
   // Per-button disabled-reason strings, in priority order matching the
   // disabled={...} prop's short-circuit. SINGLE SOURCE OF TRUTH that
-  // drives both the title= hover hint AND the visible DisabledHint
-  // underneath each button. Returns null when the button is enabled
-  // (or when no recognised reason applies); DisabledHint renders nothing
-  // for null/empty reasons. Priority order matters because the FIRST
+  // drives both the title= hover hint AND the InfoTip's disabled
+  // callout (via the `disabledReason` prop). Returns null when the
+  // button is enabled (or when no recognised reason applies); InfoTip
+  // renders no callout for null/empty reasons. Priority order matters
+  // because the FIRST
   // reason hit is the one the user sees; e.g. an expired market should
   // surface "Market expired" before "you already hold NO" because the
   // former is the binding constraint and the latter is irrelevant once
@@ -1568,39 +1569,39 @@ export default function TradePage({
               a glance, without needing to hover for the title attribute.
               `cursor-not-allowed` reinforces the affordance.
 
-              DisabledHint heads-up: each button's reason is computed
-              into a per-button const (`buyYesDisabledReason` etc.) and
-              rendered as a yellow ⓘ line UNDERNEATH the button via the
-              `<DisabledHint reason={...}/>` component. Single source of
-              truth: the same reason string drives the `title` hover
-              attribute (desktop hover affordance) AND the visible
-              DisabledHint line (touch + glance-without-hover
-              affordance). When the reason is null/empty the hint
-              renders nothing, so enabled buttons get no extra row of
-              vertical space. Replaces the prior consolidated "Why some
-              buttons are disabled:" panel at the top of the page — the
-              user reported on 2026-05-26 that the panel forced them to
-              mentally match each reason back to the button it referred
-              to, and asked for the reason to live next to the button
-              the user is actually looking at.
+              Disabled-reason heads-up (2026-06-22 SPOT consolidation):
+              each button's reason is computed into a per-button const
+              (`buyYesDisabledReason` etc.) and passed into the InfoTip
+              as `disabledReason`. InfoTip is the single ⓘ per button —
+              when the reason is non-empty the icon tints yellow and the
+              popover prepends a "Why disabled" callout above the
+              mechanism explanation. Single source of truth: the same
+              reason string drives the `title` hover attribute (desktop
+              hover affordance) AND the InfoTip's disabled callout
+              (touch + glance-without-hover affordance). When the reason
+              is null/empty the InfoTip behaves as before (mechanism
+              only, action-colored icon). Replaces the prior pattern of
+              two side-by-side ⓘ icons (InfoTip + DisabledHint) which
+              users read as visual clutter ("two info icons per field"),
+              which itself had replaced the original consolidated
+              "Why some buttons are disabled:" panel from 2026-05-26.
 
               Each button is wrapped in a `relative` div so its InfoTip
               icon can absolutely position into the button's top-right
-              corner. The InfoTip popover explains the on-chain mechanism
-              (especially important for Buy No / Sell No, which look like
-              symmetric NO orders but actually mint or burn a pair under
-              the hood). Top-row buttons get side="top" (popover above)
+              corner. Top-row buttons get side="top" (popover above)
               and bottom-row get side="bottom" (popover below) so the
               popover never overlaps the other row of buttons. */}
           {/* Per-button disabled-reason strings are computed at the top
               of this component (search for `buyYesDisabledReason`).
               Reason is null when the button is enabled OR when no
-              recognised reason applies; <DisabledHint> renders nothing
-              in either case so enabled buttons get no extra row of
-              vertical space. Redeem Pair's own gated block already
-              prints settled / pair-balance hints directly under the
-              button via `settledHint`, so it does not get a
-              DisabledHint here. */}
+              recognised reason applies; InfoTip's disabled callout
+              renders nothing in either case. Redeem Pair's own gated
+              block already prints settled / pair-balance hints directly
+              under the button via `settledHint`, so it does not get a
+              disabledReason here. Mint Pair has no InfoTip of its own
+              (no on-chain mechanism worth a popover beyond the button
+              label), so the standalone DisabledHint component is still
+              used there. */}
           <div className="grid grid-cols-2 gap-2">
             <div className="relative">
               <button
@@ -1619,15 +1620,17 @@ export default function TradePage({
               >
                 {busy === "Buy Yes" ? "..." : "Buy Yes"}
               </button>
-              {/* Single flex row holds both ⓘ icons (mechanism + disabled
-                  reason) directly under the button. Same vertical
-                  position for every button so the row scans cleanly
-                  across the 2x2 grid. */}
-              <div className="mt-1.5 flex items-center gap-2 px-1">
+              {/* Single ⓘ per button (2026-06-22 consolidation). The
+                  InfoTip owns both the mechanism explanation AND the
+                  disabled-reason callout — see InfoTip.tsx for the SPOT
+                  rationale. When disabled, the icon tints yellow and the
+                  popover prepends a "Why disabled" block. */}
+              <div className="mt-1.5 px-1">
               <InfoTip
                 title="How Buy Yes works"
                 side="top"
                 className="text-yes"
+                disabledReason={buyYesDisabledReason}
               >
                 {m && m.outcome === "Pending" && (
                   <p className="rounded bg-yes/10 px-2 py-1.5 text-text">
@@ -1652,7 +1655,6 @@ export default function TradePage({
                   the current best ask and letting the cranker cross.
                 </p>
               </InfoTip>
-              <DisabledHint reason={buyYesDisabledReason} />
               </div>
             </div>
             <div className="relative">
@@ -1682,11 +1684,12 @@ export default function TradePage({
               >
                 {busy === "Buy No" ? "..." : "Buy No"}
               </button>
-              <div className="mt-1.5 flex items-center gap-2 px-1">
+              <div className="mt-1.5 px-1">
               <InfoTip
                 title="How Buy No actually works"
                 side="top"
                 className="text-no"
+                disabledReason={buyNoDisabledReason}
               >
                 {m && m.outcome === "Pending" && (
                   <p className="rounded bg-no/10 px-2 py-1.5 text-text">
@@ -1716,7 +1719,6 @@ export default function TradePage({
                   less than your floor if the resting bid is richer.
                 </p>
               </InfoTip>
-              <DisabledHint reason={buyNoDisabledReason} />
               </div>
             </div>
             <div className="relative">
@@ -1736,11 +1738,12 @@ export default function TradePage({
               >
                 {busy === "Sell Yes" ? "..." : "Sell Yes"}
               </button>
-              <div className="mt-1.5 flex items-center gap-2 px-1">
+              <div className="mt-1.5 px-1">
               <InfoTip
                 title="How Sell Yes works"
                 side="bottom"
                 className="text-yes"
+                disabledReason={sellYesDisabledReason}
               >
                 <p>
                   Posts a resting limit <strong>ASK</strong> on the YES order book at your chosen price.
@@ -1752,7 +1755,6 @@ export default function TradePage({
                   any time before fill.
                 </p>
               </InfoTip>
-              <DisabledHint reason={sellYesDisabledReason} />
               </div>
             </div>
             <div className="relative">
@@ -1782,11 +1784,12 @@ export default function TradePage({
               >
                 {busy === "Sell No" ? "..." : "Sell No"}
               </button>
-              <div className="mt-1.5 flex items-center gap-2 px-1">
+              <div className="mt-1.5 px-1">
               <InfoTip
                 title="How Sell No actually works"
                 side="bottom"
                 className="text-no"
+                disabledReason={sellNoDisabledReason}
               >
                 <p>
                   <strong>There is no separate NO order book.</strong> Sell No is the atomic{" "}
@@ -1807,7 +1810,6 @@ export default function TradePage({
                   else on the network would have minted theirs fresh via <code>buy_no</code>.
                 </p>
               </InfoTip>
-              <DisabledHint reason={sellNoDisabledReason} />
               </div>
             </div>
           </div>
