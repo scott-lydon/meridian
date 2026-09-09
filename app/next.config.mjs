@@ -1,7 +1,30 @@
 /** @type {import('next').NextConfig} */
+//
+// STATIC_EXPORT builds the app as plain files for an archive host.
+//
+// Why this exists: this app used to be served from Render at
+// meridian-frontend-f6af.onrender.com. That service was deleted when the Render
+// account was wound down, so every citation of that URL returns 404. The app has
+// no API routes and no server actions (its Solana calls are client side), so it
+// exports statically without losing behaviour.
+//
+// Guarded by an environment variable so the normal server build is untouched.
+// basePath and assetPrefix are needed because the archive is served from a
+// subpath rather than a domain root.
+const staticExport = process.env.STATIC_EXPORT === '1';
+const archiveBasePath = process.env.ARCHIVE_BASE_PATH || '';
+
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  ...(staticExport
+    ? {
+        output: 'export',
+        images: { unoptimized: true },
+        trailingSlash: true,
+        ...(archiveBasePath ? { basePath: archiveBasePath, assetPrefix: archiveBasePath } : {}),
+      }
+    : {}),
   // Force Webpack worker threads off until @solana/wallet-adapter resolves
   // Buffer + Node polyfills cleanly under Turbopack.
   experimental: {
@@ -32,6 +55,7 @@ const nextConfig = {
   // The edge cache still benefits from `s-maxage` from Next's default; we
   // are only constraining the browser layer.
   async headers() {
+    if (staticExport) return [];
     return [
       {
         // All page routes (HTML responses). Bypasses Next's default
