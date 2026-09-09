@@ -37,9 +37,11 @@ jobs:
       # No version pin: the repo's package.json already sets packageManager,
       # and specifying both makes the action fail with ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
+      # pnpm 11 requires Node >= 22.13; Node 20 fails with
+      # ERR_UNKNOWN_BUILTIN_MODULE on node:sqlite.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: Install
         run: pnpm install --no-frozen-lockfile
       - name: Build static export
